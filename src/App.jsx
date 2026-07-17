@@ -85,10 +85,7 @@ async function enviarMailComprador({ toEmail, buyerName, alumnaName, seats, tota
           alumna_name: alumnaName,
           seats: seats.join(", "),
           total: `$${total.toLocaleString("es-AR")} ARS`,
-          // Mensaje de confirmación para el comprador
-          buyer_name: buyerName,
-          comprobante_url: "— Confirmación de reserva —",
-          mensaje_extra: `Hola ${buyerName}! Tu reserva para la Función Anual Mussas 2026 está confirmada.\n\nButacas reservadas: ${seats.join(", ")}\n\nRecordá acercarte al instituto en los horarios habituales para abonar el saldo y retirar tus entradas físicas. Las entradas son IMPRESCINDIBLES para ingresar a la sala.\n\n¡Muchas gracias y nos vemos pronto! 🎭\nEquipo Mussas Instituto de Danza`,
+          comprobante_url: `✅ Reserva confirmada para la Función Anual Mussas 2026. Butacas: ${seats.join(", ")}. Recordá acercarte al instituto en los horarios habituales para abonar el saldo y retirar tus entradas físicas. Las entradas son IMPRESCINDIBLES para ingresar a la sala. ¡Muchas gracias! Equipo Mussas 🎭`,
         }
       })
     });
