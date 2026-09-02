@@ -7,33 +7,102 @@ import {
 import { SALA, getAllSeatIds, CONFIG } from "./salaConfig.js";
 import { logEvent, getLogs, LOG_EVENTS } from "./logger.js";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 const genUserId = () => `u_${Math.random().toString(36).slice(2,9)}_${Date.now()}`;
 
-// ─── Init Firestore ───────────────────────────────────────────────────────────
+// ─── Google Drive ─────────────────────────────────────────────────────────────
+const DRIVE_FOLDER_ID = "1sAyxdnEkNR_9XBCmyIvBcdjYHtd5SdwM";
+const GOOGLE_CLIENT_ID = "1047596825193-iqj2001ji97hrmdb6fqh3sim3olgcis4.apps.googleusercontent.com";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+let accessToken = null;
+
+function loadGoogleScript() {
+  return new Promise((resolve) => {
+    if (window.google?.accounts) { resolve(); return; }
+    const s = document.createElement("script");
+    s.src = "https://accounts.google.com/gsi/client";
+    s.onload = resolve;
+    document.head.appendChild(s);
+  });
+}
+
+async function getGoogleToken() {
+  await loadGoogleScript();
+  return new Promise((resolve, reject) => {
+    if (accessToken) { resolve(accessToken); return; }
+    const client = window.google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope: DRIVE_SCOPE,
+      callback: (resp) => {
+        if (resp.error) { reject(new Error(resp.error)); return; }
+        accessToken = resp.access_token;
+        resolve(accessToken);
+      },
+    });
+    client.requestAccessToken({ prompt: "consent" });
+  });
+}
+
+async function uploadToDrive(file, buyerName, seats) {
+  const token = await getGoogleToken();
+  const ext = file.name.split(".").pop();
+  const fileName = `${buyerName.replace(/\s+/g,"_")}_${seats.join("-")}_${Date.now()}.${ext}`;
+  const metadata = { name: fileName, parents: [DRIVE_FOLDER_ID] };
+  const form = new FormData();
+  form.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+  form.append("file", file);
+  const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) throw new Error("Error al subir a Drive");
+  const data = await res.json();
+  return data.webViewLink;
+}
+
+// ─── EmailJS ──────────────────────────────────────────────────────────────────
+async function enviarMailAdmin({ buyerName, buyerDni, alumnaName, buyerEmail, seats, comprobanteUrl, total }) {
+  try {
+    await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service_id: CONFIG.EMAILJS_SERVICE_ID,
+        template_id: CONFIG.EMAILJS_TEMPLATE_ID,
+        user_id: CONFIG.EMAILJS_PUBLIC_KEY,
+        template_params: {
+          to_email: CONFIG.ADMIN_EMAIL,
+          buyer_name: buyerName,
+          buyer_dni: buyerDni,
+          alumna_name: alumnaName,
+          buyer_email: buyerEmail,
+          seats: seats.join(", "),
+          total: `$${total.toLocaleString("es-AR")} ARS`,
+          comprobante_url: comprobanteUrl,
+        }
+      })
+    });
+  } catch(e) { console.error("EmailJS:", e); }
+}
+
+// ─── Firestore helpers ────────────────────────────────────────────────────────
 async function initSalaIfNeeded() {
   const ref = doc(db, "entradas", "sala");
   const snap = await getDoc(ref);
   if (!snap.exists()) {
     const seats = {};
-    for (const id of getAllSeatIds()) {
-      seats[id] = { status: "free", userId: null, blockedUntil: null };
-    }
+    for (const id of getAllSeatIds()) seats[id] = { status: "free", userId: null, blockedUntil: null };
     await setDoc(ref, { seats });
   }
-  const qRef = doc(db, "entradas", "queue");
-  const qSnap = await getDoc(qRef);
-  if (!qSnap.exists()) await setDoc(qRef, { list: [] });
-  const tRef = doc(db, "entradas", "turno");
-  const tSnap = await getDoc(tRef);
-  if (!tSnap.exists()) await setDoc(tRef, { userId: null, expiresAt: null });
+  const qSnap = await getDoc(doc(db, "entradas", "queue"));
+  if (!qSnap.exists()) await setDoc(doc(db, "entradas", "queue"), { list: [] });
+  const tSnap = await getDoc(doc(db, "entradas", "turno"));
+  if (!tSnap.exists()) await setDoc(doc(db, "entradas", "turno"), { userId: null, expiresAt: null });
 }
 
 async function resetSala() {
   const seats = {};
-  for (const id of getAllSeatIds()) {
-    seats[id] = { status: "free", userId: null, blockedUntil: null };
-  }
+  for (const id of getAllSeatIds()) seats[id] = { status: "free", userId: null, blockedUntil: null };
   await setDoc(doc(db, "entradas", "sala"), { seats });
   await setDoc(doc(db, "entradas", "queue"), { list: [] });
   await setDoc(doc(db, "entradas", "turno"), { userId: null, expiresAt: null });
@@ -45,10 +114,9 @@ async function liberarBloqueadasVencidas() {
     await runTransaction(db, async tx => {
       const ss = await tx.get(doc(db, "entradas", "sala"));
       if (!ss.exists()) return;
-      const seats = ss.data().seats;
-      const upd = { ...seats };
+      const upd = { ...ss.data().seats };
       let changed = false;
-      for (const [id, seat] of Object.entries(seats)) {
+      for (const [id, seat] of Object.entries(upd)) {
         if (seat.status === "blocked" && seat.blockedUntil && seat.blockedUntil < now) {
           upd[id] = { status: "free", userId: null, blockedUntil: null };
           changed = true;
@@ -70,42 +138,45 @@ export default function App() {
   const [mySeats, setMySeats] = useState([]);
   const [phase, setPhase]     = useState("loading");
   const [toast, setToast]     = useState(null);
-  const [formSubmitted, setFormSubmitted] = useState(false);
+  const [error, setError]     = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [buyerName, setBuyerName]         = useState("");
+  const [buyerApellido, setBuyerApellido] = useState("");
+  const [buyerDni, setBuyerDni]           = useState("");
+  const [buyerEmail, setBuyerEmail]       = useState("");
+  const [alumnaName, setAlumnaName]       = useState("");
+  const [comprobanteFile, setComprobanteFile]       = useState(null);
+  const [comprobantePreview, setComprobantePreview] = useState(null);
   const toastRef = useRef(null);
 
-  // ── Init ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     initSalaIfNeeded().then(() => setPhase("mapa"));
     logEvent(userId, LOG_EVENTS.ENTRO_AL_SITIO);
     liberarBloqueadasVencidas();
-    const interval = setInterval(liberarBloqueadasVencidas, 60000);
-    return () => clearInterval(interval);
+    const iv = setInterval(liberarBloqueadasVencidas, 60000);
+    return () => clearInterval(iv);
   }, []);
 
-  // ── Listener butacas en tiempo real ─────────────────────────────────────────
   useEffect(() => {
     const unsub = onSnapshot(doc(db, "entradas", "sala"), snap => {
       if (snap.exists()) {
-        const newSeats = snap.data().seats || {};
-        setSeats(newSeats);
-        setMySeats(prev => prev.filter(id => newSeats[id]?.userId === userId));
+        const s = snap.data().seats || {};
+        setSeats(s);
+        setMySeats(prev => prev.filter(id => s[id]?.userId === userId));
       }
     });
     return unsub;
   }, [userId]);
 
-  // ── Toast ────────────────────────────────────────────────────────────────────
   const showToast = (msg, type = "info") => {
     setToast({ msg, type });
     clearTimeout(toastRef.current);
     toastRef.current = setTimeout(() => setToast(null), 3500);
   };
 
-  // ── Toggle butaca ────────────────────────────────────────────────────────────
   const toggleSeat = async (seatId) => {
     if (phase !== "mapa") return;
     const seat = seats[seatId];
-
     if (mySeats.includes(seatId)) {
       try {
         await runTransaction(db, async tx => {
@@ -119,16 +190,10 @@ export default function App() {
       } catch(e) { console.error(e); }
       return;
     }
-
-    if (seat?.status === "sold") {
-      showToast("Esta butaca ya fue vendida.", "error");
-      return;
-    }
+    if (seat?.status === "sold") { showToast("Esta butaca ya fue vendida.", "error"); return; }
     if (seat?.status === "blocked" && seat?.userId !== userId) {
-      showToast("Alguien ya seleccionó esta ubicación. Intentá con otra 😊", "warn");
-      return;
+      showToast("Alguien ya seleccionó esta ubicación. Intentá con otra 😊", "warn"); return;
     }
-
     try {
       await runTransaction(db, async tx => {
         const ss = await tx.get(doc(db, "entradas", "sala"));
@@ -142,51 +207,53 @@ export default function App() {
       logEvent(userId, LOG_EVENTS.SELECCIONO_BUTACA, { seatId });
     } catch(e) {
       showToast("Alguien ya seleccionó esta ubicación. Intentá con otra 😊", "warn");
-      logEvent(userId, LOG_EVENTS.BUTACA_TOMADA, { seatId });
     }
   };
 
-  // ── Ir al formulario ─────────────────────────────────────────────────────────
-  const irAFormulario = () => {
-    if (mySeats.length === 0) { showToast("Seleccioná al menos una butaca.", "error"); return; }
-    logEvent(userId, LOG_EVENTS.COMPLETO_FORMULARIO, { seats: mySeats });
-    setPhase("formulario");
-  };
-
-  // ── Confirmar envío del form ─────────────────────────────────────────────────
-  const confirmarFormEnviado = async () => {
-    // Marcar butacas como vendidas
-    await runTransaction(db, async tx => {
-      const ss = await tx.get(doc(db, "entradas", "sala"));
-      const upd = { ...ss.data().seats };
-      for (const seatId of mySeats) {
-        upd[seatId] = { status: "sold", userId, blockedUntil: null };
-      }
-      tx.update(doc(db, "entradas", "sala"), { seats: upd });
-    });
-
-    await addDoc(collection(db, "compras"), {
-      userId, seats: mySeats,
-      total: mySeats.length * CONFIG.PRECIO,
-      timestamp: serverTimestamp(),
-    });
-
-    logEvent(userId, LOG_EVENTS.COMPRA_CONFIRMADA, { seats: mySeats });
-    setPhase("done");
+  const confirmarCompra = async () => {
+    if (!buyerName.trim() || !buyerApellido.trim() || !buyerDni.trim() || !buyerEmail.trim() || !alumnaName.trim()) {
+      setError("Completá todos los campos."); return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(buyerEmail)) {
+      setError("Ingresá un email válido."); return;
+    }
+    if (!comprobanteFile) { setError("Adjuntá el comprobante de pago."); return; }
+    setError(""); setUploading(true);
+    try {
+      const fullName = `${buyerName} ${buyerApellido}`;
+      const total = mySeats.length * CONFIG.PRECIO;
+      const comprobanteUrl = await uploadToDrive(comprobanteFile, fullName, mySeats);
+      await runTransaction(db, async tx => {
+        const ss = await tx.get(doc(db, "entradas", "sala"));
+        const upd = { ...ss.data().seats };
+        for (const seatId of mySeats) {
+          upd[seatId] = { status: "sold", userId, buyer: fullName, dni: buyerDni, alumna: alumnaName, comprobanteUrl, blockedUntil: null };
+        }
+        tx.update(doc(db, "entradas", "sala"), { seats: upd });
+      });
+      await addDoc(collection(db, "compras"), {
+        userId, buyerName: fullName, buyerDni, buyerEmail, alumnaName,
+        seats: mySeats, total, comprobanteUrl, timestamp: serverTimestamp(),
+      });
+      logEvent(userId, LOG_EVENTS.COMPRA_CONFIRMADA, { seats: mySeats, buyer: fullName });
+      await enviarMailAdmin({ buyerName: fullName, buyerDni, alumnaName, buyerEmail, seats: mySeats, comprobanteUrl, total });
+      setPhase("done");
+    } catch(e) {
+      console.error(e);
+      setError("Hubo un error al subir el comprobante. Intentá de nuevo.");
+      logEvent(userId, LOG_EVENTS.ERROR, { msg: e.message });
+    }
+    setUploading(false);
   };
 
   const total = mySeats.length * CONFIG.PRECIO;
 
-  // ─── RENDER ────────────────────────────────────────────────────────────────
   return (
     <div style={{ minHeight:"100vh", background:"var(--dark)" }}>
       <div className="top-stripe" />
-
       <header className="site-header">
         <p className="eyebrow">Entradas Online</p>
-        <h1 className="site-title" style={{ fontSize:"clamp(42px,9vw,90px)", letterSpacing:".04em" }}>
-          {CONFIG.EVENTO_NOMBRE}
-        </h1>
+        <h1 className="site-title" style={{ fontSize:"clamp(42px,9vw,90px)", letterSpacing:".04em" }}>{CONFIG.EVENTO_NOMBRE}</h1>
         <p style={{ fontFamily:"'Cormorant Garamond',serif", fontSize:"clamp(18px,3vw,28px)", color:"var(--gold-light)", letterSpacing:".12em", textTransform:"uppercase", marginBottom:16 }}>
           {CONFIG.EVENTO_SUBTITULO}
         </p>
@@ -205,7 +272,6 @@ export default function App() {
       </header>
 
       <main style={{ maxWidth:1000, margin:"0 auto", padding:"36px 16px 120px" }}>
-
         {phase === "loading" && <Loader />}
 
         {phase === "mapa" && (
@@ -214,7 +280,6 @@ export default function App() {
               Tocá las butacas que querés reservar. Se bloquean al instante para que nadie más las tome.
             </p>
             <SalaMap seats={seats} mySeats={mySeats} onToggle={toggleSeat} userId={userId} />
-
             {mySeats.length > 0 && (
               <div className="selection-panel">
                 <h3 style={{ fontSize:22, marginBottom:14 }}>Tu selección</h3>
@@ -224,8 +289,8 @@ export default function App() {
                 <p style={{ fontSize:18, color:"var(--gold)", marginBottom:20 }}>
                   Total: <strong>${total.toLocaleString("es-AR")} ARS</strong>
                 </p>
-                <button className="btn-primary" onClick={irAFormulario} style={{ width:"100%" }}>
-                  Continuar → Completar datos y pago
+                <button className="btn-primary" onClick={() => setPhase("formulario")} style={{ width:"100%" }}>
+                  Continuar → Datos y pago
                 </button>
               </div>
             )}
@@ -233,49 +298,74 @@ export default function App() {
         )}
 
         {phase === "formulario" && (
-          <div style={{ maxWidth:640, margin:"0 auto" }}>
+          <div style={{ maxWidth:520, margin:"0 auto" }}>
             <button className="btn-ghost" onClick={() => setPhase("mapa")} style={{ marginBottom:20, fontSize:11 }}>
               ← Volver al mapa
             </button>
-
-            {/* Info de reserva */}
-            <div style={{ background:"var(--dark2)", border:"1px solid var(--border)", borderTop:"2px solid var(--gold)", padding:"20px 24px", marginBottom:20 }}>
-              <p style={{ fontSize:13, color:"var(--text-mid)", marginBottom:8 }}>
-                Butacas seleccionadas: <strong style={{ color:"var(--gold)" }}>{mySeats.join(", ")}</strong>
+            <div className="card">
+              <h2 style={{ fontSize:26, marginBottom:6 }}>Tus datos</h2>
+              <p style={{ fontSize:13, color:"var(--text-mid)", marginBottom:24 }}>
+                Butacas: <strong style={{ color:"var(--gold)" }}>{mySeats.join(", ")}</strong>
+                {" · "}Total: <strong style={{ color:"var(--gold)" }}>${total.toLocaleString("es-AR")}</strong>
               </p>
-              <p style={{ fontSize:16, color:"var(--gold-light)" }}>
-                Total a reservar: <strong>${total.toLocaleString("es-AR")} ARS</strong>
+              <div style={{ display:"grid", gap:12, marginBottom:24 }}>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                  <div>
+                    <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-dim)", display:"block", marginBottom:6 }}>NOMBRE</label>
+                    <input placeholder="Tu nombre" value={buyerName} onChange={e => setBuyerName(e.target.value)} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-dim)", display:"block", marginBottom:6 }}>APELLIDO</label>
+                    <input placeholder="Tu apellido" value={buyerApellido} onChange={e => setBuyerApellido(e.target.value)} />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-dim)", display:"block", marginBottom:6 }}>DNI</label>
+                  <input placeholder="Número de DNI" value={buyerDni} onChange={e => setBuyerDni(e.target.value)} />
+                </div>
+                <div>
+                  <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-dim)", display:"block", marginBottom:6 }}>EMAIL</label>
+                  <input placeholder="tucorreo@email.com" type="email" value={buyerEmail} onChange={e => setBuyerEmail(e.target.value)} />
+                </div>
+                <div>
+                  <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-dim)", display:"block", marginBottom:6 }}>NOMBRE Y APELLIDO DE LA ALUMNA QUE BAILA</label>
+                  <input placeholder="Nombre completo de la alumna" value={alumnaName} onChange={e => setAlumnaName(e.target.value)} />
+                </div>
+              </div>
+              <div style={{ borderTop:"1px solid var(--border)", paddingTop:24, marginBottom:24 }}>
+                <h3 style={{ fontSize:18, marginBottom:6 }}>Comprobante de pago</h3>
+                <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:16, lineHeight:1.6 }}>
+                  Realizá la transferencia y adjuntá la foto o captura. Se guardará automáticamente en nuestro Drive.
+                </p>
+                <label style={{ display:"block", border:"2px dashed var(--border)", padding:28, textAlign:"center", cursor:"pointer", color:"var(--text-dim)", fontSize:13, transition:"border-color .2s" }}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor="var(--gold)"; }}
+                  onDragLeave={e => { e.currentTarget.style.borderColor="var(--border)"; }}
+                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor="var(--border)"; const f=e.dataTransfer.files[0]; if(f){setComprobanteFile(f);setComprobantePreview(URL.createObjectURL(f));} }}
+                >
+                  <input type="file" accept="image/*,.pdf" style={{ display:"none" }}
+                    onChange={e => { const f=e.target.files[0]; if(f){setComprobanteFile(f);setComprobantePreview(URL.createObjectURL(f));} }} />
+                  {comprobantePreview ? (
+                    <div>
+                      <img src={comprobantePreview} alt="preview" style={{ maxHeight:160, maxWidth:"100%", marginBottom:8, objectFit:"contain" }} />
+                      <p style={{ fontSize:12, color:"var(--gold)" }}>✓ {comprobanteFile.name}</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <div style={{ fontSize:32, marginBottom:8 }}>📎</div>
+                      <p>Tocá para adjuntar o arrastrá la imagen</p>
+                      <p style={{ fontSize:11, marginTop:4, color:"#444" }}>JPG, PNG o PDF</p>
+                    </div>
+                  )}
+                </label>
+              </div>
+              {error && <p style={{ color:"#e05050", fontSize:13, marginBottom:12 }}>{error}</p>}
+              <button className="btn-primary" onClick={confirmarCompra} disabled={uploading} style={{ width:"100%" }}>
+                {uploading ? "Subiendo comprobante…" : "Confirmar reserva"}
+              </button>
+              <p style={{ fontSize:11, color:"var(--text-dim)", textAlign:"center", marginTop:10, lineHeight:1.5 }}>
+                Al confirmar, Google te pedirá autorización para subir el comprobante a nuestro Drive.
               </p>
             </div>
-
-            {/* Instrucciones */}
-            <div style={{ background:"rgba(224,69,138,0.08)", border:"1px solid rgba(224,69,138,0.3)", padding:"14px 20px", marginBottom:20, fontSize:13, color:"#f0a0c8", lineHeight:1.6 }}>
-              📋 Completá el formulario con tus datos y adjuntá el comprobante de pago. Una vez enviado, hacé clic en <strong>"Ya envié el formulario"</strong> para confirmar tu reserva.
-            </div>
-
-            {/* Google Form incrustado */}
-            <div style={{ border:"1px solid var(--border)", overflow:"hidden", background:"var(--dark2)", marginBottom:20 }}>
-              <iframe
-                src={CONFIG.GOOGLE_FORM_URL}
-                width="100%"
-                height="900"
-                frameBorder="0"
-                marginHeight="0"
-                marginWidth="0"
-                style={{ display:"block", filter:"invert(0.92) hue-rotate(140deg) brightness(0.9)" }}
-                title="Formulario de reserva"
-              >
-                Cargando formulario…
-              </iframe>
-            </div>
-
-            {/* Botón confirmar */}
-            <button className="btn-primary" onClick={confirmarFormEnviado} style={{ width:"100%", padding:"16px" }}>
-              ✅ Ya envié el formulario — Confirmar mi reserva
-            </button>
-            <p style={{ fontSize:11, color:"var(--text-dim)", textAlign:"center", marginTop:10 }}>
-              Solo hacé clic después de completar y enviar el formulario de arriba
-            </p>
           </div>
         )}
 
@@ -284,16 +374,14 @@ export default function App() {
             <div style={{ fontSize:52, marginBottom:14 }}>🎟️</div>
             <h2 style={{ fontSize:34, marginBottom:8 }}>¡Reserva confirmada!</h2>
             <p style={{ fontSize:14, color:"var(--gold-light)", marginBottom:24, lineHeight:1.6 }}>
-              Tu reserva fue registrada correctamente.
+              Tu comprobante fue recibido. El equipo de Mussas lo verificará a la brevedad.
             </p>
             <div style={{ borderTop:"1px solid var(--border)", borderBottom:"1px solid var(--border)", padding:"20px 0", marginBottom:20 }}>
               <p style={{ fontSize:11, color:"var(--text-dim)", letterSpacing:".12em", marginBottom:10 }}>TUS BUTACAS</p>
               <div style={{ display:"flex", flexWrap:"wrap", gap:8, justifyContent:"center" }}>
                 {mySeats.map(s => <span key={s} className="seat-tag">{s}</span>)}
               </div>
-              <p style={{ fontSize:16, color:"var(--gold)", marginTop:14 }}>
-                ${total.toLocaleString("es-AR")} ARS
-              </p>
+              <p style={{ fontSize:16, color:"var(--gold)", marginTop:14 }}>${total.toLocaleString("es-AR")} ARS</p>
             </div>
             <p style={{ fontSize:13, color:"var(--text-mid)", lineHeight:1.7 }}>
               Recordá acercarte al instituto en los horarios habituales para abonar el saldo y retirar tus entradas físicas.<br />
@@ -301,39 +389,29 @@ export default function App() {
             </p>
           </div>
         )}
-
       </main>
 
-      {/* Toast */}
       {toast && (
-        <div style={{
-          position:"fixed", bottom:80, left:"50%", transform:"translateX(-50%)",
-          background: toast.type==="error" ? "#3a1010" : toast.type==="warn" ? "#2e2010" : "var(--dark3)",
-          border:`1px solid ${toast.type==="error" ? "var(--red)" : toast.type==="warn" ? "var(--gold)" : "#333"}`,
-          color: toast.type==="warn" ? "var(--gold-light)" : "var(--cream)",
-          padding:"12px 24px", fontSize:14, zIndex:100, maxWidth:340, textAlign:"center",
-          boxShadow:"0 4px 24px rgba(0,0,0,.5)", lineHeight:1.5,
-        }}>
+        <div style={{ position:"fixed", bottom:80, left:"50%", transform:"translateX(-50%)", background: toast.type==="error"?"#3a1010":toast.type==="warn"?"#2e2010":"var(--dark3)", border:`1px solid ${toast.type==="error"?"var(--red)":toast.type==="warn"?"var(--gold)":"#333"}`, color: toast.type==="warn"?"var(--gold-light)":"var(--cream)", padding:"12px 24px", fontSize:14, zIndex:100, maxWidth:340, textAlign:"center", boxShadow:"0 4px 24px rgba(0,0,0,.5)", lineHeight:1.5 }}>
           {toast.msg}
         </div>
       )}
-
       <StickyLegend show={phase === "mapa"} />
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PANEL ADMIN
+// ADMIN PANEL
 // ═══════════════════════════════════════════════════════════════════════════════
 function AdminPanel() {
-  const [authed, setAuthed]   = useState(false);
-  const [pass, setPass]       = useState("");
+  const [authed, setAuthed] = useState(false);
+  const [pass, setPass] = useState("");
   const [passError, setPassError] = useState("");
-  const [seats, setSeats]     = useState({});
-  const [logs, setLogs]       = useState([]);
+  const [seats, setSeats] = useState({});
+  const [logs, setLogs] = useState([]);
   const [compras, setCompras] = useState([]);
-  const [tab, setTab]         = useState("sala");
+  const [tab, setTab] = useState("sala");
   const [resetting, setResetting] = useState(false);
 
   const login = () => {
@@ -371,33 +449,22 @@ function AdminPanel() {
     logEvent("ADMIN", LOG_EVENTS.ADMIN_ANULO_BUTACA, { seatId });
   };
 
-  const resetearSala = async () => {
-    if (!confirm("¿Resetear TODA la sala? Esto libera todas las butacas.")) return;
-    setResetting(true);
-    await resetSala();
-    setResetting(false);
-  };
-
   if (!authed) return (
     <div style={{ minHeight:"100vh", background:"var(--dark)", display:"flex", alignItems:"center", justifyContent:"center" }}>
       <div className="top-stripe" style={{ position:"fixed", top:0, left:0, right:0 }} />
       <div className="card" style={{ maxWidth:360, width:"100%", textAlign:"center" }}>
         <div style={{ fontSize:36, marginBottom:12 }}>🔐</div>
         <h2 style={{ fontSize:24, marginBottom:20 }}>Panel Admin</h2>
-        <input type="password" placeholder="Contraseña" value={pass}
-          onChange={e => setPass(e.target.value)}
-          onKeyDown={e => e.key==="Enter" && login()}
-          style={{ marginBottom:12 }}
-        />
+        <input type="password" placeholder="Contraseña" value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} style={{ marginBottom:12 }} />
         {passError && <p style={{ color:"#e05050", fontSize:13, marginBottom:10 }}>{passError}</p>}
         <button className="btn-primary" onClick={login} style={{ width:"100%" }}>Ingresar</button>
       </div>
     </div>
   );
 
-  const soldSeats    = Object.entries(seats).filter(([,s]) => s.status==="sold");
-  const blockedSeats = Object.entries(seats).filter(([,s]) => s.status==="blocked");
-  const freeSeats    = Object.entries(seats).filter(([,s]) => s.status==="free");
+  const soldSeats = Object.entries(seats).filter(([,s])=>s.status==="sold");
+  const blockedSeats = Object.entries(seats).filter(([,s])=>s.status==="blocked");
+  const freeSeats = Object.entries(seats).filter(([,s])=>s.status==="free");
 
   return (
     <div style={{ minHeight:"100vh", background:"var(--dark)" }}>
@@ -408,88 +475,60 @@ function AdminPanel() {
           <h1 style={{ fontFamily:"'Cormorant Garamond',serif", fontWeight:300, fontSize:26 }}>Mussas — Función 2026</h1>
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          <button className="btn-ghost" style={{ fontSize:11, borderColor:"var(--red)", color:"var(--red)" }}
-            onClick={resetearSala} disabled={resetting}>
-            {resetting ? "Reseteando…" : "🗑 Resetear sala"}
+          <button className="btn-ghost" style={{ fontSize:11, borderColor:"var(--red)", color:"var(--red)" }} disabled={resetting}
+            onClick={async()=>{ if(!confirm("¿Resetear toda la sala?"))return; setResetting(true); await resetSala(); setResetting(false); }}>
+            {resetting?"Reseteando…":"🗑 Resetear sala"}
           </button>
           <a href="/"><button className="btn-ghost" style={{ fontSize:11 }}>← Volver al sitio</button></a>
         </div>
       </header>
-
-      {/* Stats */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:1, background:"var(--border)" }}>
-        {[
-          { label:"Vendidas",   value:soldSeats.length,    color:"var(--red)" },
-          { label:"Reservadas", value:blockedSeats.length, color:"var(--gold)" },
-          { label:"Libres",     value:freeSeats.length,    color:"var(--green-light)" },
-          { label:"Compras",    value:compras.length,      color:"var(--cream)" },
-        ].map(({ label, value, color }) => (
+        {[{label:"Vendidas",value:soldSeats.length,color:"var(--red)"},{label:"Reservadas",value:blockedSeats.length,color:"var(--gold)"},{label:"Libres",value:freeSeats.length,color:"var(--green-light)"},{label:"Compras",value:compras.length,color:"var(--cream)"}].map(({label,value,color})=>(
           <div key={label} style={{ background:"var(--dark2)", padding:"18px 20px", textAlign:"center" }}>
             <div style={{ fontSize:30, fontFamily:"'Archivo Narrow',sans-serif", fontWeight:600, color }}>{value}</div>
             <div style={{ fontSize:10, letterSpacing:".12em", color:"var(--text-dim)", marginTop:4 }}>{label.toUpperCase()}</div>
           </div>
         ))}
       </div>
-
-      {/* Tabs */}
       <div style={{ display:"flex", borderBottom:"1px solid var(--border)", padding:"0 24px" }}>
-        {[["sala","Sala"],["compras","Compras"],["logs","Log"]].map(([id,label]) => (
-          <button key={id} onClick={() => setTab(id)} style={{
-            background:"none", border:"none",
-            borderBottom: tab===id ? "2px solid var(--gold)" : "2px solid transparent",
-            color: tab===id ? "var(--gold)" : "var(--text-dim)",
-            fontFamily:"'Archivo Narrow',sans-serif", fontSize:13, letterSpacing:".08em",
-            padding:"14px 20px", cursor:"pointer", textTransform:"uppercase"
-          }}>{label}</button>
+        {[["sala","Sala"],["compras","Compras"],["logs","Log"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{ background:"none", border:"none", borderBottom:tab===id?"2px solid var(--gold)":"2px solid transparent", color:tab===id?"var(--gold)":"var(--text-dim)", fontFamily:"'Archivo Narrow',sans-serif", fontSize:13, letterSpacing:".08em", padding:"14px 20px", cursor:"pointer", textTransform:"uppercase" }}>{label}</button>
         ))}
       </div>
-
       <div style={{ padding:24, maxWidth:1100, margin:"0 auto" }}>
-
-        {tab === "sala" && (
+        {tab==="sala" && (
           <div>
-            <p style={{ fontSize:13, color:"var(--text-mid)", marginBottom:20 }}>
-              Tocá una butaca para ver sus datos y gestionarla.
-            </p>
-            <SalaMap seats={seats} mySeats={[]} onToggle={()=>{}} userId="ADMIN"
-              adminMode onActivar={activarButaca} onAnular={anularButaca} />
+            <p style={{ fontSize:13, color:"var(--text-mid)", marginBottom:20 }}>Tocá una butaca para gestionarla.</p>
+            <SalaMap seats={seats} mySeats={[]} onToggle={()=>{}} userId="ADMIN" adminMode onActivar={activarButaca} onAnular={anularButaca} />
           </div>
         )}
-
-        {tab === "compras" && (
+        {tab==="compras" && (
           <div>
-            {compras.length === 0 && <p style={{ color:"var(--text-dim)", fontSize:13 }}>No hay compras registradas todavía.</p>}
+            {compras.length===0 && <p style={{ color:"var(--text-dim)", fontSize:13 }}>No hay compras registradas.</p>}
             <div style={{ display:"grid", gap:10 }}>
-              {compras.map(c => (
-                <div key={c.id} style={{ background:"var(--dark2)", border:"1px solid var(--border)", padding:"16px 20px" }}>
-                  <p style={{ fontSize:13, color:"var(--gold)", marginBottom:4 }}>
-                    Butacas: <strong>{(c.seats||[]).join(", ")}</strong>
-                  </p>
-                  <p style={{ fontSize:12, color:"var(--text-dim)" }}>
-                    ${(c.total||0).toLocaleString("es-AR")} ARS · {c.timestamp?.toDate ? c.timestamp.toDate().toLocaleString("es-AR") : "—"}
-                  </p>
+              {compras.map(c=>(
+                <div key={c.id} style={{ background:"var(--dark2)", border:"1px solid var(--border)", padding:"16px 20px", display:"grid", gridTemplateColumns:"1fr auto", gap:12, alignItems:"start" }}>
+                  <div>
+                    <p style={{ fontSize:15, fontWeight:600, marginBottom:2 }}>{c.buyerName} <span style={{ fontWeight:400, fontSize:13, color:"var(--text-mid)" }}>· DNI {c.buyerDni}</span></p>
+                    <p style={{ fontSize:13, color:"var(--gold)", marginBottom:4 }}>Alumna: {c.alumnaName}</p>
+                    <p style={{ fontSize:12, color:"var(--text-dim)" }}>{(c.seats||[]).join(", ")} · ${(c.total||0).toLocaleString("es-AR")} ARS</p>
+                  </div>
+                  {c.comprobanteUrl && (
+                    <button className="btn-ghost" style={{ fontSize:11 }} onClick={()=>window.open(c.comprobanteUrl,"_blank","noopener,noreferrer")}>Ver comprobante ↗</button>
+                  )}
                 </div>
               ))}
             </div>
           </div>
         )}
-
-        {tab === "logs" && (
+        {tab==="logs" && (
           <div>
-            <button className="btn-ghost" style={{ marginBottom:16, fontSize:11 }}
-              onClick={() => getLogs(300).then(setLogs)}>↻ Actualizar</button>
+            <button className="btn-ghost" style={{ marginBottom:16, fontSize:11 }} onClick={()=>getLogs(300).then(setLogs)}>↻ Actualizar</button>
             <div style={{ display:"grid", gap:4 }}>
-              {logs.map(l => (
+              {logs.map(l=>(
                 <div key={l.id} style={{ background:"var(--dark2)", border:"1px solid var(--border)", padding:"10px 16px", display:"grid", gridTemplateColumns:"160px 1fr auto", gap:12, alignItems:"center", fontSize:12 }}>
-                  <span style={{ color:"var(--text-dim)", fontFamily:"monospace", fontSize:10 }}>
-                    {l.timestamp?.toDate ? l.timestamp.toDate().toLocaleString("es-AR") : "—"}
-                  </span>
-                  <span>
-                    <span style={{ color:"var(--gold)", marginRight:8 }}>{l.event}</span>
-                    {l.details && Object.keys(l.details).length > 0 && (
-                      <span style={{ color:"var(--text-dim)" }}>· {JSON.stringify(l.details)}</span>
-                    )}
-                  </span>
+                  <span style={{ color:"var(--text-dim)", fontFamily:"monospace", fontSize:10 }}>{l.timestamp?.toDate?l.timestamp.toDate().toLocaleString("es-AR"):"—"}</span>
+                  <span><span style={{ color:"var(--gold)", marginRight:8 }}>{l.event}</span>{l.details&&Object.keys(l.details).length>0&&<span style={{ color:"var(--text-dim)" }}>· {JSON.stringify(l.details)}</span>}</span>
                   <span style={{ color:"#444", fontFamily:"monospace", fontSize:10 }}>{(l.userId||"").slice(0,14)}</span>
                 </div>
               ))}
@@ -502,7 +541,7 @@ function AdminPanel() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MAPA DE SALA
+// MAPA DE SALA — pasillo central alineado
 // ═══════════════════════════════════════════════════════════════════════════════
 function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnular }) {
   const [adminSeat, setAdminSeat] = useState(null);
@@ -512,85 +551,68 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
     if (mySeats.includes(seatId)) return "mine";
     const s = seats[seatId];
     if (!s) return "free";
-    if (s.status === "sold")    return "sold";
+    if (s.status === "sold") return "sold";
     if (s.status === "blocked") return s.userId === userId ? "mine" : "blocked";
     return "free";
   };
 
+  const allFilas = [...SALA.platea.filas, ...SALA.pullman.filas];
+  const maxIzq = Math.max(...allFilas.map(f => f.izq.length));
+  const maxDer = Math.max(...allFilas.map(f => f.der.length));
+  const SW = 14, SG = 2, AISLE = 24;
+
   const renderSector = (sector, sectorKey) => (
-    <div key={sectorKey} style={{ marginBottom:40 }}>
-      <p style={{ textAlign:"center", fontSize:10, letterSpacing:".18em", color:"var(--text-dim)", textTransform:"uppercase", marginBottom:14 }}>
+    <div key={sectorKey} style={{ marginBottom:36 }}>
+      <p style={{ textAlign:"center", fontSize:10, letterSpacing:".18em", color:"var(--text-dim)", textTransform:"uppercase", marginBottom:12 }}>
         {sector.label}
       </p>
       <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
-        {sector.filas.map(fila => (
-          <div key={fila.id} style={{ display:"flex", alignItems:"center", gap:2 }}>
-            {/* Número de fila izquierda */}
-            <span style={{ fontSize:8, color:"#445", width:20, textAlign:"right", fontFamily:"monospace" }}>{fila.id}</span>
+        {sector.filas.map(fila => {
+          const padIzq = maxIzq - fila.izq.length;
+          return (
+            <div key={fila.id} style={{ display:"flex", alignItems:"center" }}>
+              <span style={{ fontSize:8, color:"#556", width:24, textAlign:"right", marginRight:3, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
 
-            {/* Butacas izquierda (impares, de mayor a menor = de afuera hacia el centro) */}
-            <div style={{ display:"flex", gap:2 }}>
-              {fila.izq.map(n => {
-                const seatId = `${fila.id}-${n}`;
-                const status = getStatus(seatId);
-                return (
-                  <div key={seatId}
-                    className={`seat ${status}`}
-                    style={{ width:14, height:11 }}
-                    title={`${seatId}${seats[seatId]?.buyer ? " — "+seats[seatId].buyer : ""}`}
-                    onClick={() => adminMode ? setAdminSeat(adminSeat===seatId?null:seatId) : onToggle(seatId)}
-                  />
-                );
-              })}
+              {/* Lado izquierdo — padding a la izq para que las butacas queden pegadas al pasillo */}
+              <div style={{ display:"flex", gap:SG, width: maxIzq*(SW+SG)-SG, justifyContent:"flex-end" }}>
+                {Array(padIzq).fill(null).map((_,i) => <div key={i} style={{ width:SW, height:11, flexShrink:0 }} />)}
+                {fila.izq.map(n => {
+                  const sid = `${fila.id}-${n}`;
+                  return <div key={sid} className={`seat ${getStatus(sid)}`} style={{ width:SW, height:11, flexShrink:0 }} title={`Butaca ${sid}`} onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)} />;
+                })}
+              </div>
+
+              {/* Pasillo */}
+              <div style={{ width:AISLE, flexShrink:0 }} />
+
+              {/* Lado derecho */}
+              <div style={{ display:"flex", gap:SG, width: maxDer*(SW+SG)-SG, justifyContent:"flex-start" }}>
+                {fila.der.map(n => {
+                  const sid = `${fila.id}-${n}`;
+                  return <div key={sid} className={`seat ${getStatus(sid)}`} style={{ width:SW, height:11, flexShrink:0 }} title={`Butaca ${sid}`} onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)} />;
+                })}
+              </div>
+
+              <span style={{ fontSize:8, color:"#556", width:24, marginLeft:3, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
             </div>
-
-            {/* Pasillo central */}
-            <div style={{ width:16 }} />
-
-            {/* Butacas derecha (pares, de menor a mayor = del centro hacia afuera) */}
-            <div style={{ display:"flex", gap:2 }}>
-              {fila.der.map(n => {
-                const seatId = `${fila.id}-${n}`;
-                const status = getStatus(seatId);
-                return (
-                  <div key={seatId}
-                    className={`seat ${status}`}
-                    style={{ width:14, height:11 }}
-                    title={`${seatId}${seats[seatId]?.buyer ? " — "+seats[seatId].buyer : ""}`}
-                    onClick={() => adminMode ? setAdminSeat(adminSeat===seatId?null:seatId) : onToggle(seatId)}
-                  />
-                );
-              })}
-            </div>
-
-            <span style={{ fontSize:8, color:"#445", width:20, fontFamily:"monospace" }}>{fila.id}</span>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Popup admin */}
       {adminMode && adminSeat && seats[adminSeat] && (
         <div style={{ background:"var(--dark3)", border:"1px solid var(--gold)", padding:16, marginTop:16, maxWidth:360, margin:"16px auto 0" }}>
-          <p style={{ fontSize:13, marginBottom:6 }}>
-            <strong style={{ color:"var(--gold)" }}>{adminSeat}</strong> — <strong>{seats[adminSeat].status}</strong>
-          </p>
+          <p style={{ fontSize:13, marginBottom:6 }}><strong style={{ color:"var(--gold)" }}>{adminSeat}</strong> — <strong>{seats[adminSeat].status}</strong></p>
           {seats[adminSeat].buyer && <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:2 }}>Comprador: {seats[adminSeat].buyer}</p>}
           {seats[adminSeat].dni && <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:2 }}>DNI: {seats[adminSeat].dni}</p>}
           {seats[adminSeat].alumna && <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:8 }}>Alumna: {seats[adminSeat].alumna}</p>}
+          {seats[adminSeat].comprobanteUrl && (
+            <button className="btn-ghost" style={{ fontSize:11, width:"100%", marginBottom:8 }} onClick={()=>window.open(seats[adminSeat].comprobanteUrl,"_blank")}>Ver comprobante ↗</button>
+          )}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
-            {seats[adminSeat].status !== "free" && (
-              <button className="btn-ghost" style={{ fontSize:10, borderColor:"var(--green-light)", color:"var(--green-light)" }}
-                onClick={() => { onActivar(adminSeat); setAdminSeat(null); }}>
-                ✓ Liberar
-              </button>
-            )}
-            {seats[adminSeat].status !== "sold" && (
-              <button className="btn-ghost" style={{ fontSize:10, borderColor:"var(--red)", color:"var(--red)" }}
-                onClick={() => { onAnular(adminSeat); setAdminSeat(null); }}>
-                ✗ Anular
-              </button>
-            )}
-            <button className="btn-ghost" style={{ fontSize:10 }} onClick={() => setAdminSeat(null)}>Cerrar</button>
+            {seats[adminSeat].status!=="free" && <button className="btn-ghost" style={{ fontSize:10, borderColor:"var(--green-light)", color:"var(--green-light)" }} onClick={()=>{onActivar(adminSeat);setAdminSeat(null);}}>✓ Liberar</button>}
+            {seats[adminSeat].status!=="sold" && <button className="btn-ghost" style={{ fontSize:10, borderColor:"var(--red)", color:"var(--red)" }} onClick={()=>{onAnular(adminSeat);setAdminSeat(null);}}>✗ Anular</button>}
+            <button className="btn-ghost" style={{ fontSize:10 }} onClick={()=>setAdminSeat(null)}>Cerrar</button>
           </div>
         </div>
       )}
@@ -598,7 +620,7 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
   );
 
   return (
-    <div style={{ textAlign:"center" }}>
+    <div style={{ textAlign:"center", overflowX:"auto" }}>
       <div style={{ marginBottom:24 }}><div className="escenario">Escenario</div></div>
       {renderSector(SALA.platea, "platea")}
       <div style={{ height:1, background:"var(--border)", maxWidth:500, margin:"4px auto 28px" }} />
@@ -611,16 +633,8 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
 function Legend() {
   return (
     <div className="legend" style={{ marginTop:20 }}>
-      {[
-        { cls:"free",    label:"Libre" },
-        { cls:"mine",    label:"Tu selección" },
-        { cls:"blocked", label:"Reservada por otro" },
-        { cls:"sold",    label:"Vendida" },
-      ].map(({ cls, label }) => (
-        <div className="legend-item" key={cls}>
-          <div className={`legend-dot seat ${cls}`} />
-          <span>{label}</span>
-        </div>
+      {[{cls:"free",label:"Libre"},{cls:"mine",label:"Tu selección"},{cls:"blocked",label:"Reservada por otro"},{cls:"sold",label:"Vendida"}].map(({cls,label})=>(
+        <div className="legend-item" key={cls}><div className={`legend-dot seat ${cls}`} /><span>{label}</span></div>
       ))}
     </div>
   );
@@ -630,16 +644,8 @@ function StickyLegend({ show }) {
   if (!show) return null;
   return (
     <div className="sticky-legend">
-      {[
-        { cls:"free",    label:"Libre" },
-        { cls:"mine",    label:"Tu selección" },
-        { cls:"blocked", label:"Reservada" },
-        { cls:"sold",    label:"Vendida" },
-      ].map(({ cls, label }) => (
-        <div className="legend-item" key={cls}>
-          <div className={`legend-dot seat ${cls}`} />
-          <span>{label}</span>
-        </div>
+      {[{cls:"free",label:"Libre"},{cls:"mine",label:"Tu selección"},{cls:"blocked",label:"Reservada"},{cls:"sold",label:"Vendida"}].map(({cls,label})=>(
+        <div className="legend-item" key={cls}><div className={`legend-dot seat ${cls}`} /><span>{label}</span></div>
       ))}
     </div>
   );
