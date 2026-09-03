@@ -61,5 +61,6 @@ export const CONFIG = {
   EMAILJS_SERVICE_ID: "service_3gat7f2",
   EMAILJS_TEMPLATE_ID: "template_lx7v1bf",
   EMAILJS_PUBLIC_KEY: "8FUUXg0aGQ6kLJJLB",
+  EMAILJS_TEMPLATE_COMPRADOR_ID: "template_79otqsm",
   GOOGLE_FORM_URL: "https://docs.google.com/forms/d/1AQybao5nqHFONPZzdo-3E6Otgz0iAtIoDjmwNu2eOiY/viewform?embedded=true",
 };
