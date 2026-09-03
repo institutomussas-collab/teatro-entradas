@@ -9,43 +9,58 @@ import { logEvent, getLogs, LOG_EVENTS } from "./logger.js";
 
 const genUserId = () => `u_${Math.random().toString(36).slice(2,9)}_${Date.now()}`;
 
-// ─── EmailJS con adjunto base64 ───────────────────────────────────────────────
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result.split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+// ─── Cloudinary ───────────────────────────────────────────────────────────────
+async function uploadToCloudinary(file) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("upload_preset", "ct6j8msw");
+  form.append("folder", "comprobantes");
+  const res = await fetch("https://api.cloudinary.com/v1_1/pawft90i/auto/upload", {
+    method: "POST", body: form,
+  });
+  if (!res.ok) throw new Error("Error al subir comprobante");
+  const data = await res.json();
+  return data.secure_url;
+}
+
+// ─── EmailJS ──────────────────────────────────────────────────────────────────
+async function emailjsSend(templateId, params) {
+  await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      service_id: CONFIG.EMAILJS_SERVICE_ID,
+      template_id: templateId,
+      user_id: CONFIG.EMAILJS_PUBLIC_KEY,
+      template_params: params,
+    })
   });
 }
 
-async function enviarMailAdmin({ buyerName, buyerDni, alumnaName, buyerEmail, seats, total, comprobanteFile }) {
-  try {
-    const base64 = await fileToBase64(comprobanteFile);
-    const ext = comprobanteFile.name.split(".").pop();
-    await fetch("https://api.emailjs.com/api/v1.0/email/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        service_id: CONFIG.EMAILJS_SERVICE_ID,
-        template_id: CONFIG.EMAILJS_TEMPLATE_ID,
-        user_id: CONFIG.EMAILJS_PUBLIC_KEY,
-        template_params: {
-          to_email: CONFIG.ADMIN_EMAIL,
-          buyer_name: buyerName,
-          buyer_dni: buyerDni,
-          alumna_name: alumnaName,
-          buyer_email: buyerEmail,
-          seats: seats.join(", "),
-          total: `$${total.toLocaleString("es-AR")} ARS`,
-          comprobante_url: `data:image/${ext};base64,${base64}`,
-        }
-      })
-    });
-  } catch(e) { console.error("EmailJS:", e); }
+async function enviarMailAdmin({ buyerName, buyerDni, alumnaName, buyerEmail, seats, total, comprobanteUrl }) {
+  await emailjsSend(CONFIG.EMAILJS_TEMPLATE_ID, {
+    to_email: CONFIG.ADMIN_EMAIL,
+    buyer_name: buyerName,
+    buyer_dni: buyerDni,
+    alumna_name: alumnaName,
+    buyer_email: buyerEmail,
+    seats: seats.join(", "),
+    total: `$${total.toLocaleString("es-AR")} ARS`,
+    comprobante_url: comprobanteUrl,
+  });
 }
 
-// ─── Firestore helpers ────────────────────────────────────────────────────────
+async function enviarMailComprador({ buyerName, buyerEmail, alumnaName, seats, total }) {
+  await emailjsSend(CONFIG.EMAILJS_TEMPLATE_COMPRADOR_ID, {
+    buyer_email: buyerEmail,
+    buyer_name: buyerName,
+    alumna_name: alumnaName,
+    seats: seats.join(", "),
+    total: `$${total.toLocaleString("es-AR")} ARS`,
+  });
+}
+
+// ─── Firestore ────────────────────────────────────────────────────────────────
 async function initSalaIfNeeded() {
   const ref = doc(db, "entradas", "sala");
   const snap = await getDoc(ref);
@@ -85,6 +100,51 @@ async function liberarBloqueadasVencidas() {
       if (changed) tx.update(doc(db, "entradas", "sala"), { seats: upd });
     });
   } catch(e) { console.error("liberarBloqueadas:", e); }
+}
+
+// ─── Excel export ─────────────────────────────────────────────────────────────
+function exportarExcel(compras, seats) {
+  // Construir mapa de butaca → compra
+  const butacaMap = {};
+  for (const c of compras) {
+    for (const s of (c.seats || [])) {
+      butacaMap[s] = c;
+    }
+  }
+
+  // Ordenar butacas según el plano (platea primero, luego pullman, en orden de fila)
+  const todasLasButacas = getAllSeatIds();
+  const filas = [];
+
+  for (const seatId of todasLasButacas) {
+    const compra = butacaMap[seatId];
+    const seatData = seats[seatId];
+    filas.push({
+      Butaca: seatId,
+      Estado: seatData?.status === "sold" ? "Vendida" : seatData?.status === "blocked" ? "Reservada" : "Libre",
+      Comprador: compra?.buyerName || "",
+      DNI: compra?.buyerDni || "",
+      Email: compra?.buyerEmail || "",
+      Alumna: compra?.alumnaName || "",
+      Total: compra?.total ? `$${compra.total.toLocaleString("es-AR")}` : "",
+      Fecha: compra?.timestamp?.toDate ? compra.timestamp.toDate().toLocaleString("es-AR") : "",
+    });
+  }
+
+  // Generar CSV (compatible con Excel)
+  const headers = Object.keys(filas[0]);
+  const csv = [
+    headers.join(";"),
+    ...filas.map(r => headers.map(h => `"${(r[h]||"").toString().replace(/"/g,'""')}"`).join(";"))
+  ].join("\n");
+
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `mussas-entradas-2026.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -178,29 +238,34 @@ export default function App() {
       setError("Ingresá un email válido."); return;
     }
     if (!comprobanteFile) { setError("Adjuntá el comprobante de pago."); return; }
+    if (comprobanteFile.size > 5 * 1024 * 1024) { setError("El archivo es muy grande. Máximo 5MB."); return; }
     setError(""); setUploading(true);
     try {
       const fullName = `${buyerName} ${buyerApellido}`;
       const total = mySeats.length * CONFIG.PRECIO;
+
+      // Subir comprobante a Cloudinary
+      const comprobanteUrl = await uploadToCloudinary(comprobanteFile);
 
       // Marcar butacas como vendidas
       await runTransaction(db, async tx => {
         const ss = await tx.get(doc(db, "entradas", "sala"));
         const upd = { ...ss.data().seats };
         for (const seatId of mySeats) {
-          upd[seatId] = { status: "sold", userId, buyer: fullName, dni: buyerDni, alumna: alumnaName, blockedUntil: null };
+          upd[seatId] = { status: "sold", userId, buyer: fullName, dni: buyerDni, alumna: alumnaName, comprobanteUrl, blockedUntil: null };
         }
         tx.update(doc(db, "entradas", "sala"), { seats: upd });
       });
 
-      // Guardar compra en Firestore
+      // Guardar compra
       await addDoc(collection(db, "compras"), {
         userId, buyerName: fullName, buyerDni, buyerEmail, alumnaName,
-        seats: mySeats, total, timestamp: serverTimestamp(),
+        seats: mySeats, total, comprobanteUrl, timestamp: serverTimestamp(),
       });
 
-      // Enviar mail con comprobante adjunto
-      await enviarMailAdmin({ buyerName: fullName, buyerDni, alumnaName, buyerEmail, seats: mySeats, total, comprobanteFile });
+      // Mails
+      await enviarMailAdmin({ buyerName: fullName, buyerDni, alumnaName, buyerEmail, seats: mySeats, total, comprobanteUrl });
+      await enviarMailComprador({ buyerName, buyerEmail, alumnaName, seats: mySeats, total });
 
       logEvent(userId, LOG_EVENTS.COMPRA_CONFIRMADA, { seats: mySeats, buyer: fullName });
       setPhase("done");
@@ -290,7 +355,7 @@ export default function App() {
                   <input placeholder="Número de DNI" value={buyerDni} onChange={e => setBuyerDni(e.target.value)} />
                 </div>
                 <div>
-                  <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-dim)", display:"block", marginBottom:6 }}>EMAIL</label>
+                  <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-mid)", display:"block", marginBottom:6 }}>EMAIL — te enviaremos la confirmación aquí</label>
                   <input placeholder="tucorreo@email.com" type="email" value={buyerEmail} onChange={e => setBuyerEmail(e.target.value)} />
                 </div>
                 <div>
@@ -298,11 +363,10 @@ export default function App() {
                   <input placeholder="Nombre completo de la alumna" value={alumnaName} onChange={e => setAlumnaName(e.target.value)} />
                 </div>
               </div>
-
               <div style={{ borderTop:"1px solid var(--border)", paddingTop:24, marginBottom:24 }}>
                 <h3 style={{ fontSize:18, marginBottom:6 }}>Comprobante de pago</h3>
                 <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:16, lineHeight:1.6 }}>
-                  Realizá la transferencia y adjuntá la foto o captura. Te llegará a vos por mail junto con los datos de la reserva.
+                  Realizá la transferencia y adjuntá la foto o captura del comprobante. Máximo 5MB.
                 </p>
                 <label style={{ display:"block", border:"2px dashed var(--border)", padding:28, textAlign:"center", cursor:"pointer", color:"var(--text-dim)", fontSize:13, transition:"border-color .2s" }}
                   onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor="var(--gold)"; }}
@@ -320,15 +384,14 @@ export default function App() {
                     <div>
                       <div style={{ fontSize:32, marginBottom:8 }}>📎</div>
                       <p>Tocá para adjuntar o arrastrá la imagen</p>
-                      <p style={{ fontSize:11, marginTop:4, color:"#444" }}>JPG, PNG o PDF</p>
+                      <p style={{ fontSize:11, marginTop:4, color:"#444" }}>JPG, PNG o PDF · máx. 5MB</p>
                     </div>
                   )}
                 </label>
               </div>
-
               {error && <p style={{ color:"#e05050", fontSize:13, marginBottom:12 }}>{error}</p>}
               <button className="btn-primary" onClick={confirmarCompra} disabled={uploading} style={{ width:"100%" }}>
-                {uploading ? "Enviando comprobante…" : "Confirmar reserva"}
+                {uploading ? "Procesando reserva…" : "Confirmar reserva"}
               </button>
             </div>
           </div>
@@ -339,7 +402,7 @@ export default function App() {
             <div style={{ fontSize:52, marginBottom:14 }}>🎟️</div>
             <h2 style={{ fontSize:34, marginBottom:8 }}>¡Reserva confirmada!</h2>
             <p style={{ fontSize:14, color:"var(--gold-light)", marginBottom:24, lineHeight:1.6 }}>
-              Tu comprobante fue recibido. El equipo de Mussas lo verificará a la brevedad.
+              Te enviamos un mail de confirmación a <strong>{buyerEmail}</strong>
             </p>
             <div style={{ borderTop:"1px solid var(--border)", borderBottom:"1px solid var(--border)", padding:"20px 0", marginBottom:20 }}>
               <p style={{ fontSize:11, color:"var(--text-dim)", letterSpacing:".12em", marginBottom:10 }}>TUS BUTACAS</p>
@@ -348,9 +411,11 @@ export default function App() {
               </div>
               <p style={{ fontSize:16, color:"var(--gold)", marginTop:14 }}>${total.toLocaleString("es-AR")} ARS</p>
             </div>
-            <p style={{ fontSize:13, color:"var(--text-mid)", lineHeight:1.7 }}>
-              Recordá acercarte al instituto en los horarios habituales para abonar el saldo y retirar tus entradas físicas.<br />
-              <strong style={{ color:"var(--gold-light)" }}>Las entradas son imprescindibles para ingresar a la sala.</strong>
+            <p style={{ fontSize:13, color:"var(--text-mid)", lineHeight:1.8 }}>
+              Para obtener tus entradas físicas, acercate a Mussas<br />
+              <strong style={{ color:"var(--gold-light)" }}>lunes a viernes de 17 a 20 hs.</strong><br />
+              para abonar el saldo.<br /><br />
+              Las entradas físicas son <strong style={{ color:"var(--gold-light)" }}>indispensables para ingresar al evento</strong>.
             </p>
           </div>
         )}
@@ -388,7 +453,7 @@ function AdminPanel() {
     if (!authed) return;
     const unsub = onSnapshot(doc(db,"entradas","sala"), s => s.exists() && setSeats(s.data().seats||{}));
     getLogs(300).then(setLogs);
-    getDocs(query(collection(db,"compras"), orderBy("timestamp","desc"), limit(100)))
+    getDocs(query(collection(db,"compras"), orderBy("timestamp","desc"), limit(200)))
       .then(snap => setCompras(snap.docs.map(d => ({ id:d.id, ...d.data() }))));
     return unsub;
   }, [authed]);
@@ -440,6 +505,10 @@ function AdminPanel() {
           <h1 style={{ fontFamily:"'Cormorant Garamond',serif", fontWeight:300, fontSize:26 }}>Mussas — Función 2026</h1>
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button className="btn-ghost" style={{ fontSize:11, borderColor:"var(--green-light)", color:"var(--green-light)" }}
+            onClick={() => exportarExcel(compras, seats)}>
+            📊 Descargar Excel
+          </button>
           <button className="btn-ghost" style={{ fontSize:11, borderColor:"var(--red)", color:"var(--red)" }} disabled={resetting}
             onClick={async()=>{ if(!confirm("¿Resetear toda la sala?"))return; setResetting(true); await resetSala(); setResetting(false); }}>
             {resetting?"Reseteando…":"🗑 Resetear sala"}
@@ -473,6 +542,10 @@ function AdminPanel() {
 
         {tab==="compras" && (
           <div>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+              <p style={{ fontSize:13, color:"var(--text-mid)" }}>{compras.length} compra{compras.length!==1?"s":""} registrada{compras.length!==1?"s":""}</p>
+              <button className="btn-ghost" style={{ fontSize:11 }} onClick={() => exportarExcel(compras, seats)}>📊 Descargar Excel</button>
+            </div>
             {compras.length===0 && <p style={{ color:"var(--text-dim)", fontSize:13 }}>No hay compras registradas.</p>}
             <div style={{ display:"grid", gap:10 }}>
               {compras.map(c=>(
@@ -480,7 +553,7 @@ function AdminPanel() {
                   <div style={{ display:"flex", justifyContent:"space-between", alignItems:"start", flexWrap:"wrap", gap:8, marginBottom:12 }}>
                     <div>
                       <p style={{ fontSize:16, fontWeight:600, marginBottom:2 }}>{c.buyerName}</p>
-                      <p style={{ fontSize:13, color:"var(--text-mid)" }}>DNI: {c.buyerDni} · Email: {c.buyerEmail}</p>
+                      <p style={{ fontSize:13, color:"var(--text-mid)" }}>DNI: {c.buyerDni} · {c.buyerEmail}</p>
                     </div>
                     <div style={{ textAlign:"right" }}>
                       <p style={{ fontSize:16, color:"var(--gold)", fontWeight:600 }}>${(c.total||0).toLocaleString("es-AR")} ARS</p>
@@ -490,11 +563,14 @@ function AdminPanel() {
                   <div style={{ borderTop:"1px solid var(--border)", paddingTop:10, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
                     <div>
                       <p style={{ fontSize:13, color:"var(--gold-light)", marginBottom:2 }}>Alumna: <strong>{c.alumnaName}</strong></p>
-                      <p style={{ fontSize:12, color:"var(--text-dim)" }}>Butacas: {(c.seats||[]).join(", ")}</p>
+                      <p style={{ fontSize:12, color:"var(--text-dim)" }}>Butacas: <strong style={{color:"var(--cream)"}}>{(c.seats||[]).join(", ")}</strong></p>
                     </div>
-                    <div style={{ fontSize:11, color:"var(--text-dim)", fontStyle:"italic" }}>
-                      📧 Comprobante enviado por mail
-                    </div>
+                    {c.comprobanteUrl && (
+                      <button className="btn-ghost" style={{ fontSize:11 }}
+                        onClick={() => window.open(c.comprobanteUrl, "_blank", "noopener,noreferrer")}>
+                        Ver comprobante ↗
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -522,7 +598,7 @@ function AdminPanel() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MAPA DE SALA
+// MAPA — pasillo central perfecto
 // ═══════════════════════════════════════════════════════════════════════════════
 function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnular }) {
   const [adminSeat, setAdminSeat] = useState(null);
@@ -551,36 +627,40 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
           const padIzq = maxIzq - fila.izq.length;
           return (
             <div key={fila.id} style={{ display:"flex", alignItems:"center" }}>
-              <span style={{ fontSize:8, color:"#556", width:24, textAlign:"right", marginRight:3, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
-              {/* Lado izquierdo alineado al pasillo */}
-              <div style={{ display:"flex", gap:SG, width: maxIzq*(SW+SG)-SG, justifyContent:"flex-end" }}>
+              <span style={{ fontSize:8, color:"#556", width:24, textAlign:"right", marginRight:4, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
+              {/* Izquierda — alineada al pasillo con padding a la izquierda */}
+              <div style={{ display:"flex", gap:SG, width: maxIzq*(SW+SG), justifyContent:"flex-end", flexShrink:0 }}>
                 {Array(padIzq).fill(null).map((_,i) => <div key={i} style={{ width:SW, height:11, flexShrink:0 }} />)}
                 {fila.izq.map(n => {
                   const sid = `${fila.id}-${n}`;
                   return <div key={sid} className={`seat ${getStatus(sid)}`} style={{ width:SW, height:11, flexShrink:0 }} title={`Butaca ${sid}`} onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)} />;
                 })}
               </div>
-              {/* Pasillo */}
+              {/* Pasillo fijo */}
               <div style={{ width:AISLE, flexShrink:0 }} />
-              {/* Lado derecho */}
-              <div style={{ display:"flex", gap:SG }}>
+              {/* Derecha */}
+              <div style={{ display:"flex", gap:SG, flexShrink:0 }}>
                 {fila.der.map(n => {
                   const sid = `${fila.id}-${n}`;
                   return <div key={sid} className={`seat ${getStatus(sid)}`} style={{ width:SW, height:11, flexShrink:0 }} title={`Butaca ${sid}`} onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)} />;
                 })}
               </div>
-              <span style={{ fontSize:8, color:"#556", width:24, marginLeft:3, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
+              <span style={{ fontSize:8, color:"#556", width:24, marginLeft:4, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
             </div>
           );
         })}
       </div>
 
       {adminMode && adminSeat && seats[adminSeat] && (
-        <div style={{ background:"var(--dark3)", border:"1px solid var(--gold)", padding:16, marginTop:16, maxWidth:360, margin:"16px auto 0" }}>
+        <div style={{ background:"var(--dark3)", border:"1px solid var(--gold)", padding:16, marginTop:16, maxWidth:380, margin:"16px auto 0" }}>
           <p style={{ fontSize:13, marginBottom:6 }}><strong style={{ color:"var(--gold)" }}>{adminSeat}</strong> — <strong>{seats[adminSeat].status}</strong></p>
           {seats[adminSeat].buyer && <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:2 }}>Comprador: {seats[adminSeat].buyer}</p>}
           {seats[adminSeat].dni && <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:2 }}>DNI: {seats[adminSeat].dni}</p>}
           {seats[adminSeat].alumna && <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:8 }}>Alumna: {seats[adminSeat].alumna}</p>}
+          {seats[adminSeat].comprobanteUrl && (
+            <button className="btn-ghost" style={{ fontSize:11, width:"100%", marginBottom:8 }}
+              onClick={() => window.open(seats[adminSeat].comprobanteUrl, "_blank")}>Ver comprobante ↗</button>
+          )}
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
             {seats[adminSeat].status!=="free" && <button className="btn-ghost" style={{ fontSize:10, borderColor:"var(--green-light)", color:"var(--green-light)" }} onClick={()=>{onActivar(adminSeat);setAdminSeat(null);}}>✓ Liberar</button>}
             {seats[adminSeat].status!=="sold" && <button className="btn-ghost" style={{ fontSize:10, borderColor:"var(--red)", color:"var(--red)" }} onClick={()=>{onAnular(adminSeat);setAdminSeat(null);}}>✗ Anular</button>}
