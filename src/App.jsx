@@ -22,16 +22,18 @@ async function uploadToStorage(file, buyerName, seats) {
 
 // ─── EmailJS ──────────────────────────────────────────────────────────────────
 async function emailjsSend(templateId, params) {
-  await fetch("https://api.emailjs.com/api/v1.0/email/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      service_id: CONFIG.EMAILJS_SERVICE_ID,
-      template_id: templateId,
-      user_id: CONFIG.EMAILJS_PUBLIC_KEY,
-      template_params: params,
-    })
-  });
+  try {
+    await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service_id: CONFIG.EMAILJS_SERVICE_ID,
+        template_id: templateId,
+        user_id: CONFIG.EMAILJS_PUBLIC_KEY,
+        template_params: params,
+      })
+    });
+  } catch(e) { console.error("EmailJS:", e); }
 }
 
 async function enviarMailAdmin({ buyerName, buyerDni, alumnaName, buyerEmail, seats, total, comprobanteUrl }) {
@@ -57,7 +59,7 @@ async function enviarMailComprador({ buyerName, buyerEmail, alumnaName, seats, t
   });
 }
 
-// ─── Firestore ────────────────────────────────────────────────────────────────
+// ─── Firestore helpers ────────────────────────────────────────────────────────
 async function initSalaIfNeeded() {
   const ref = doc(db, "entradas", "sala");
   const snap = await getDoc(ref);
@@ -101,22 +103,15 @@ async function liberarBloqueadasVencidas() {
 
 // ─── Excel export ─────────────────────────────────────────────────────────────
 function exportarExcel(compras, seats) {
-  // Construir mapa de butaca → compra
   const butacaMap = {};
   for (const c of compras) {
-    for (const s of (c.seats || [])) {
-      butacaMap[s] = c;
-    }
+    for (const s of (c.seats || [])) butacaMap[s] = c;
   }
-
-  // Ordenar butacas según el plano (platea primero, luego pullman, en orden de fila)
   const todasLasButacas = getAllSeatIds();
-  const filas = [];
-
-  for (const seatId of todasLasButacas) {
+  const filas = todasLasButacas.map(seatId => {
     const compra = butacaMap[seatId];
     const seatData = seats[seatId];
-    filas.push({
+    return {
       Butaca: seatId,
       Estado: seatData?.status === "sold" ? "Vendida" : seatData?.status === "blocked" ? "Reservada" : "Libre",
       Comprador: compra?.buyerName || "",
@@ -125,22 +120,17 @@ function exportarExcel(compras, seats) {
       Alumna: compra?.alumnaName || "",
       Total: compra?.total ? `$${compra.total.toLocaleString("es-AR")}` : "",
       Fecha: compra?.timestamp?.toDate ? compra.timestamp.toDate().toLocaleString("es-AR") : "",
-    });
-  }
-
-  // Generar CSV (compatible con Excel)
+    };
+  });
   const headers = Object.keys(filas[0]);
   const csv = [
     headers.join(";"),
     ...filas.map(r => headers.map(h => `"${(r[h]||"").toString().replace(/"/g,'""')}"`).join(";"))
   ].join("\n");
-
   const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url;
-  a.download = `mussas-entradas-2026.csv`;
-  a.click();
+  a.href = url; a.download = "mussas-entradas-2026.csv"; a.click();
   URL.revokeObjectURL(url);
 }
 
@@ -240,11 +230,7 @@ export default function App() {
     try {
       const fullName = `${buyerName} ${buyerApellido}`;
       const total = mySeats.length * CONFIG.PRECIO;
-
-      // Subir comprobante a Cloudinary
       const comprobanteUrl = await uploadToStorage(comprobanteFile, fullName, mySeats);
-
-      // Marcar butacas como vendidas
       await runTransaction(db, async tx => {
         const ss = await tx.get(doc(db, "entradas", "sala"));
         const upd = { ...ss.data().seats };
@@ -253,17 +239,12 @@ export default function App() {
         }
         tx.update(doc(db, "entradas", "sala"), { seats: upd });
       });
-
-      // Guardar compra
       await addDoc(collection(db, "compras"), {
         userId, buyerName: fullName, buyerDni, buyerEmail, alumnaName,
         seats: mySeats, total, comprobanteUrl, timestamp: serverTimestamp(),
       });
-
-      // Mails
       await enviarMailAdmin({ buyerName: fullName, buyerDni, alumnaName, buyerEmail, seats: mySeats, total, comprobanteUrl });
       await enviarMailComprador({ buyerName, buyerEmail, alumnaName, seats: mySeats, total });
-
       logEvent(userId, LOG_EVENTS.COMPRA_CONFIRMADA, { seats: mySeats, buyer: fullName });
       setPhase("done");
     } catch(e) {
@@ -363,7 +344,7 @@ export default function App() {
               <div style={{ borderTop:"1px solid var(--border)", paddingTop:24, marginBottom:24 }}>
                 <h3 style={{ fontSize:18, marginBottom:6 }}>Comprobante de pago</h3>
                 <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:16, lineHeight:1.6 }}>
-                  Realizá la transferencia y adjuntá la foto o captura del comprobante. Máximo 5MB.
+                  Realizá la transferencia y adjuntá la foto o captura. Máximo 5MB.
                 </p>
                 <label style={{ display:"block", border:"2px dashed var(--border)", padding:28, textAlign:"center", cursor:"pointer", color:"var(--text-dim)", fontSize:13, transition:"border-color .2s" }}
                   onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor="var(--gold)"; }}
@@ -503,9 +484,7 @@ function AdminPanel() {
         </div>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           <button className="btn-ghost" style={{ fontSize:11, borderColor:"var(--green-light)", color:"var(--green-light)" }}
-            onClick={() => exportarExcel(compras, seats)}>
-            📊 Descargar Excel
-          </button>
+            onClick={() => exportarExcel(compras, seats)}>📊 Descargar Excel</button>
           <button className="btn-ghost" style={{ fontSize:11, borderColor:"var(--red)", color:"var(--red)" }} disabled={resetting}
             onClick={async()=>{ if(!confirm("¿Resetear toda la sala?"))return; setResetting(true); await resetSala(); setResetting(false); }}>
             {resetting?"Reseteando…":"🗑 Resetear sala"}
@@ -595,7 +574,7 @@ function AdminPanel() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MAPA — pasillo central perfecto
+// MAPA DE SALA — pasillo central perfectamente alineado
 // ═══════════════════════════════════════════════════════════════════════════════
 function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnular }) {
   const [adminSeat, setAdminSeat] = useState(null);
@@ -612,6 +591,7 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
 
   const allFilas = [...SALA.platea.filas, ...SALA.pullman.filas];
   const maxIzq = Math.max(...allFilas.map(f => f.izq.length));
+  const maxDer = Math.max(...allFilas.map(f => f.der.length));
   const SW = 14, SG = 2, AISLE = 24;
 
   const renderSector = (sector, sectorKey) => (
@@ -622,26 +602,34 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
       <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
         {sector.filas.map(fila => {
           const padIzq = maxIzq - fila.izq.length;
+          const padDer = maxDer - fila.der.length;
           return (
             <div key={fila.id} style={{ display:"flex", alignItems:"center" }}>
               <span style={{ fontSize:8, color:"#556", width:24, textAlign:"right", marginRight:4, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
-              {/* Izquierda — alineada al pasillo con padding a la izquierda */}
+
+              {/* Lado izquierdo — padding a la IZQUIERDA para que quede pegado al pasillo */}
               <div style={{ display:"flex", gap:SG, width: maxIzq*(SW+SG), justifyContent:"flex-end", flexShrink:0 }}>
                 {Array(padIzq).fill(null).map((_,i) => <div key={i} style={{ width:SW, height:11, flexShrink:0 }} />)}
                 {fila.izq.map(n => {
                   const sid = `${fila.id}-${n}`;
-                  return <div key={sid} className={`seat ${getStatus(sid)}`} style={{ width:SW, height:11, flexShrink:0 }} title={`Butaca ${sid}`} onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)} />;
+                  return <div key={sid} className={`seat ${getStatus(sid)}`} style={{ width:SW, height:11, flexShrink:0 }} title={`Butaca ${sid}`}
+                    onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)} />;
                 })}
               </div>
-              {/* Pasillo fijo */}
+
+              {/* Pasillo central fijo */}
               <div style={{ width:AISLE, flexShrink:0 }} />
-              {/* Derecha */}
-              <div style={{ display:"flex", gap:SG, flexShrink:0 }}>
+
+              {/* Lado derecho — padding a la DERECHA para que quede pegado al pasillo */}
+              <div style={{ display:"flex", gap:SG, width: maxDer*(SW+SG), justifyContent:"flex-start", flexShrink:0 }}>
                 {fila.der.map(n => {
                   const sid = `${fila.id}-${n}`;
-                  return <div key={sid} className={`seat ${getStatus(sid)}`} style={{ width:SW, height:11, flexShrink:0 }} title={`Butaca ${sid}`} onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)} />;
+                  return <div key={sid} className={`seat ${getStatus(sid)}`} style={{ width:SW, height:11, flexShrink:0 }} title={`Butaca ${sid}`}
+                    onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)} />;
                 })}
+                {Array(padDer).fill(null).map((_,i) => <div key={i} style={{ width:SW, height:11, flexShrink:0 }} />)}
               </div>
+
               <span style={{ fontSize:8, color:"#556", width:24, marginLeft:4, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
             </div>
           );
