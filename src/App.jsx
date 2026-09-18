@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { db } from "./firebase.js";
+import { db, storage } from "./firebase.js";
+import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import {
   doc, getDoc, setDoc, onSnapshot, runTransaction,
   collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs
@@ -9,18 +10,14 @@ import { logEvent, getLogs, LOG_EVENTS } from "./logger.js";
 
 const genUserId = () => `u_${Math.random().toString(36).slice(2,9)}_${Date.now()}`;
 
-// ─── Cloudinary ───────────────────────────────────────────────────────────────
-async function uploadToCloudinary(file) {
-  const form = new FormData();
-  form.append("file", file);
-  form.append("upload_preset", "ct6j8msw");
-  form.append("folder", "comprobantes");
-  const res = await fetch("https://api.cloudinary.com/v1_1/pawft90i/auto/upload", {
-    method: "POST", body: form,
-  });
-  if (!res.ok) throw new Error("Error al subir comprobante");
-  const data = await res.json();
-  return data.secure_url;
+// ─── Firebase Storage ─────────────────────────────────────────────────────────
+async function uploadToStorage(file, buyerName, seats) {
+  const ext = file.name.split(".").pop();
+  const fileName = `comprobantes/${buyerName.replace(/\s+/g,"_")}_${seats.join("-")}_${Date.now()}.${ext}`;
+  const fileRef = storageRef(storage, fileName);
+  await uploadBytes(fileRef, file);
+  const url = await getDownloadURL(fileRef);
+  return url;
 }
 
 // ─── EmailJS ──────────────────────────────────────────────────────────────────
@@ -245,7 +242,7 @@ export default function App() {
       const total = mySeats.length * CONFIG.PRECIO;
 
       // Subir comprobante a Cloudinary
-      const comprobanteUrl = await uploadToCloudinary(comprobanteFile);
+      const comprobanteUrl = await uploadToStorage(comprobanteFile, fullName, mySeats);
 
       // Marcar butacas como vendidas
       await runTransaction(db, async tx => {
