@@ -185,6 +185,8 @@ export default function App() {
     if (phase !== "mapa") return;
     const seat = seats[seatId];
     if (mySeats.includes(seatId)) {
+      // Optimistic: quitar visualmente de inmediato
+      setMySeats(prev => prev.filter(s => s !== seatId));
       try {
         await runTransaction(db, async tx => {
           const ss = await tx.get(doc(db, "entradas", "sala"));
@@ -192,15 +194,20 @@ export default function App() {
           upd[seatId] = { status: "free", userId: null, blockedUntil: null };
           tx.update(doc(db, "entradas", "sala"), { seats: upd });
         });
-        setMySeats(prev => prev.filter(s => s !== seatId));
         logEvent(userId, LOG_EVENTS.DESELECCIONO_BUTACA, { seatId });
-      } catch(e) { console.error(e); }
+      } catch(e) {
+        // Revertir si falla
+        setMySeats(prev => [...prev, seatId]);
+        console.error(e);
+      }
       return;
     }
     if (seat?.status === "sold") { showToast("Esta butaca ya fue vendida.", "error"); return; }
     if (seat?.status === "blocked" && seat?.userId !== userId) {
       showToast("Alguien ya seleccionó esta ubicación. Intentá con otra 😊", "warn"); return;
     }
+    // Optimistic: agregar visualmente de inmediato
+    setMySeats(prev => [...prev, seatId]);
     try {
       await runTransaction(db, async tx => {
         const ss = await tx.get(doc(db, "entradas", "sala"));
@@ -210,9 +217,10 @@ export default function App() {
         upd[seatId] = { status: "blocked", userId, blockedUntil: Date.now() + CONFIG.TURNO_MINUTOS * 60 * 1000 };
         tx.update(doc(db, "entradas", "sala"), { seats: upd });
       });
-      setMySeats(prev => [...prev, seatId]);
       logEvent(userId, LOG_EVENTS.SELECCIONO_BUTACA, { seatId });
     } catch(e) {
+      // Revertir si ya estaba tomada
+      setMySeats(prev => prev.filter(s => s !== seatId));
       showToast("Alguien ya seleccionó esta ubicación. Intentá con otra 😊", "warn");
     }
   };
@@ -313,23 +321,23 @@ export default function App() {
             </button>
             <div className="card">
               <h2 style={{ fontSize:26, marginBottom:6 }}>Tus datos</h2>
-              <p style={{ fontSize:13, color:"var(--text-mid)", marginBottom:24 }}>
+              <p style={{ fontSize:13, color:"var(--cream)", marginBottom:24 }}>
                 Butacas: <strong style={{ color:"var(--gold)" }}>{mySeats.join(", ")}</strong>
                 {" · "}Total: <strong style={{ color:"var(--gold)" }}>${total.toLocaleString("es-AR")}</strong>
               </p>
               <div style={{ display:"grid", gap:12, marginBottom:24 }}>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
                   <div>
-                    <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-dim)", display:"block", marginBottom:6 }}>NOMBRE</label>
+                    <label style={{ fontSize:11, letterSpacing:".1em", color:"#fff", display:"block", marginBottom:6 }}>NOMBRE</label>
                     <input placeholder="Tu nombre" value={buyerName} onChange={e => setBuyerName(e.target.value)} />
                   </div>
                   <div>
-                    <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-dim)", display:"block", marginBottom:6 }}>APELLIDO</label>
+                    <label style={{ fontSize:11, letterSpacing:".1em", color:"#fff", display:"block", marginBottom:6 }}>APELLIDO</label>
                     <input placeholder="Tu apellido" value={buyerApellido} onChange={e => setBuyerApellido(e.target.value)} />
                   </div>
                 </div>
                 <div>
-                  <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-dim)", display:"block", marginBottom:6 }}>DNI</label>
+                  <label style={{ fontSize:11, letterSpacing:".1em", color:"#fff", display:"block", marginBottom:6 }}>DNI</label>
                   <input placeholder="Número de DNI" value={buyerDni} onChange={e => setBuyerDni(e.target.value)} />
                 </div>
                 <div>
@@ -337,14 +345,21 @@ export default function App() {
                   <input placeholder="tucorreo@email.com" type="email" value={buyerEmail} onChange={e => setBuyerEmail(e.target.value)} />
                 </div>
                 <div>
-                  <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-dim)", display:"block", marginBottom:6 }}>NOMBRE Y APELLIDO DE LA ALUMNA QUE BAILA</label>
+                  <label style={{ fontSize:11, letterSpacing:".1em", color:"#fff", display:"block", marginBottom:6 }}>NOMBRE Y APELLIDO DE LA ALUMNA QUE BAILA</label>
                   <input placeholder="Nombre completo de la alumna" value={alumnaName} onChange={e => setAlumnaName(e.target.value)} />
                 </div>
               </div>
               <div style={{ borderTop:"1px solid var(--border)", paddingTop:24, marginBottom:24 }}>
-                <h3 style={{ fontSize:18, marginBottom:6 }}>Comprobante de pago</h3>
+                <h3 style={{ fontSize:18, marginBottom:12 }}>Comprobante de pago</h3>
+                <div style={{ background:"rgba(224,69,138,0.12)", border:"2px solid #e0458a", borderRadius:2, padding:"16px 20px", marginBottom:20 }}>
+                  <p style={{ fontSize:14, color:"#fff", fontWeight:600, letterSpacing:".02em", lineHeight:1.7, fontFamily:"'Archivo Narrow',sans-serif" }}>
+                    ⚠️ SIN CERRAR ESTA VENTANA, realizá el pago por transferencia al alias:<br />
+                    <span style={{ fontSize:18, color:"#e0458a", letterSpacing:".08em" }}>MUSSAS2023</span><br />
+                    y luego adjuntá el comprobante acá abajo.
+                  </p>
+                </div>
                 <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:16, lineHeight:1.6 }}>
-                  Realizá la transferencia y adjuntá la foto o captura. Máximo 5MB.
+                  Adjuntá la foto o captura del comprobante. Máximo 5MB.
                 </p>
                 <label style={{ display:"block", border:"2px dashed var(--border)", padding:28, textAlign:"center", cursor:"pointer", color:"var(--text-dim)", fontSize:13, transition:"border-color .2s" }}
                   onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor="var(--gold)"; }}
