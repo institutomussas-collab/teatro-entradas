@@ -185,8 +185,6 @@ export default function App() {
     if (phase !== "mapa") return;
     const seat = seats[seatId];
     if (mySeats.includes(seatId)) {
-      // Optimistic: quitar visualmente de inmediato
-      setMySeats(prev => prev.filter(s => s !== seatId));
       try {
         await runTransaction(db, async tx => {
           const ss = await tx.get(doc(db, "entradas", "sala"));
@@ -194,20 +192,15 @@ export default function App() {
           upd[seatId] = { status: "free", userId: null, blockedUntil: null };
           tx.update(doc(db, "entradas", "sala"), { seats: upd });
         });
+        setMySeats(prev => prev.filter(s => s !== seatId));
         logEvent(userId, LOG_EVENTS.DESELECCIONO_BUTACA, { seatId });
-      } catch(e) {
-        // Revertir si falla
-        setMySeats(prev => [...prev, seatId]);
-        console.error(e);
-      }
+      } catch(e) { console.error(e); }
       return;
     }
     if (seat?.status === "sold") { showToast("Esta butaca ya fue vendida.", "error"); return; }
     if (seat?.status === "blocked" && seat?.userId !== userId) {
       showToast("Alguien ya seleccionó esta ubicación. Intentá con otra 😊", "warn"); return;
     }
-    // Optimistic: agregar visualmente de inmediato
-    setMySeats(prev => [...prev, seatId]);
     try {
       await runTransaction(db, async tx => {
         const ss = await tx.get(doc(db, "entradas", "sala"));
@@ -217,10 +210,9 @@ export default function App() {
         upd[seatId] = { status: "blocked", userId, blockedUntil: Date.now() + CONFIG.TURNO_MINUTOS * 60 * 1000 };
         tx.update(doc(db, "entradas", "sala"), { seats: upd });
       });
+      setMySeats(prev => [...prev, seatId]);
       logEvent(userId, LOG_EVENTS.SELECCIONO_BUTACA, { seatId });
     } catch(e) {
-      // Revertir si ya estaba tomada
-      setMySeats(prev => prev.filter(s => s !== seatId));
       showToast("Alguien ya seleccionó esta ubicación. Intentá con otra 😊", "warn");
     }
   };
@@ -293,9 +285,12 @@ export default function App() {
 
         {phase === "mapa" && (
           <div>
-            <p style={{ textAlign:"center", fontSize:13, color:"var(--text-mid)", marginBottom:28 }}>
+            <p style={{ textAlign:"center", fontSize:13, color:"var(--text-mid)", marginBottom:16 }}>
               Tocá las butacas que querés reservar. Se bloquean al instante para que nadie más las tome.
             </p>
+            <div style={{ maxWidth:520, margin:"0 auto 28px", background:"rgba(42,122,110,0.08)", border:"1px solid var(--border)", padding:"12px 20px", fontSize:13, color:"var(--gold-light)", lineHeight:1.7, textAlign:"center" }}>
+              💡 Al tocar una butaca, esperá que se ponga <strong style={{color:"#e0458a"}}>rosa</strong> para confirmar que quedó reservada para vos. Si no cambia de color, significa que otra persona la seleccionó al mismo tiempo — elegí otra.
+            </div>
             <SalaMap seats={seats} mySeats={mySeats} onToggle={toggleSeat} userId={userId} />
             {mySeats.length > 0 && (
               <div className="selection-panel">
