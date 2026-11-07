@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { db, storage } from "./firebase.js";
 import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import {
@@ -8,16 +8,15 @@ import {
 import { SALA, getAllSeatIds, CONFIG } from "./salaConfig.js";
 import { logEvent, getLogs, LOG_EVENTS } from "./logger.js";
 
-const genUserId = () => `u_${Math.random().toString(36).slice(2,9)}_${Date.now()}`;
+const genUserId = () => `u_${Math.random().toString(36).slice(2, 9)}_${Date.now()}`;
 
 // ─── Firebase Storage ─────────────────────────────────────────────────────────
 async function uploadToStorage(file, buyerName, seats) {
   const ext = file.name.split(".").pop();
-  const fileName = `comprobantes/${buyerName.replace(/\s+/g,"_")}_${seats.join("-")}_${Date.now()}.${ext}`;
+  const fileName = `comprobantes/${buyerName.replace(/\s+/g, "_")}_${seats.join("-")}_${Date.now()}.${ext}`;
   const fileRef = storageRef(storage, fileName);
   await uploadBytes(fileRef, file);
-  const url = await getDownloadURL(fileRef);
-  return url;
+  return await getDownloadURL(fileRef);
 }
 
 // ─── EmailJS ──────────────────────────────────────────────────────────────────
@@ -33,7 +32,7 @@ async function emailjsSend(templateId, params) {
         template_params: params,
       })
     });
-  } catch(e) { console.error("EmailJS:", e); }
+  } catch (e) { console.error("EmailJS Error:", e); }
 }
 
 async function enviarMailAdmin({ buyerName, buyerDni, alumnaName, buyerEmail, seats, total, comprobanteUrl }) {
@@ -59,7 +58,7 @@ async function enviarMailComprador({ buyerName, buyerEmail, alumnaName, seats, t
   });
 }
 
-// ─── Firestore helpers ────────────────────────────────────────────────────────
+// ─── Firestore Helpers ────────────────────────────────────────────────────────
 async function initSalaIfNeeded() {
   const ref = doc(db, "entradas", "sala");
   const snap = await getDoc(ref);
@@ -68,18 +67,12 @@ async function initSalaIfNeeded() {
     for (const id of getAllSeatIds()) seats[id] = { status: "free", userId: null, blockedUntil: null };
     await setDoc(ref, { seats });
   }
-  const qSnap = await getDoc(doc(db, "entradas", "queue"));
-  if (!qSnap.exists()) await setDoc(doc(db, "entradas", "queue"), { list: [] });
-  const tSnap = await getDoc(doc(db, "entradas", "turno"));
-  if (!tSnap.exists()) await setDoc(doc(db, "entradas", "turno"), { userId: null, expiresAt: null });
 }
 
 async function resetSala() {
   const seats = {};
   for (const id of getAllSeatIds()) seats[id] = { status: "free", userId: null, blockedUntil: null };
   await setDoc(doc(db, "entradas", "sala"), { seats });
-  await setDoc(doc(db, "entradas", "queue"), { list: [] });
-  await setDoc(doc(db, "entradas", "turno"), { userId: null, expiresAt: null });
 }
 
 async function liberarBloqueadasVencidas() {
@@ -98,10 +91,10 @@ async function liberarBloqueadasVencidas() {
       }
       if (changed) tx.update(doc(db, "entradas", "sala"), { seats: upd });
     });
-  } catch(e) { console.error("liberarBloqueadas:", e); }
+  } catch (e) { console.error("liberarBloqueadas:", e); }
 }
 
-// ─── Excel export ─────────────────────────────────────────────────────────────
+// ─── Exportar Excel ───────────────────────────────────────────────────────────
 function exportarExcel(compras, seats) {
   const butacaMap = {};
   for (const c of compras) {
@@ -125,9 +118,9 @@ function exportarExcel(compras, seats) {
   const headers = Object.keys(filas[0]);
   const csv = [
     headers.join(";"),
-    ...filas.map(r => headers.map(h => `"${(r[h]||"").toString().replace(/"/g,'""')}"`).join(";"))
+    ...filas.map(r => headers.map(h => `"${(r[h] || "").toString().replace(/"/g, '""')}"`).join(";"))
   ].join("\n");
-  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = "mussas-entradas-2026.csv"; a.click();
@@ -140,19 +133,19 @@ function exportarExcel(compras, seats) {
 export default function App() {
   if (window.location.hash === "#admin") return <AdminPanel />;
 
-  const [userId]    = useState(genUserId);
-  const [seats, setSeats]     = useState({});
+  const [userId] = useState(genUserId);
+  const [seats, setSeats] = useState({});
   const [mySeats, setMySeats] = useState([]);
-  const [phase, setPhase]     = useState("loading");
-  const [toast, setToast]     = useState(null);
-  const [error, setError]     = useState("");
+  const [phase, setPhase] = useState("loading");
+  const [toast, setToast] = useState(null);
+  const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [buyerName, setBuyerName]         = useState("");
+  const [buyerName, setBuyerName] = useState("");
   const [buyerApellido, setBuyerApellido] = useState("");
-  const [buyerDni, setBuyerDni]           = useState("");
-  const [buyerEmail, setBuyerEmail]       = useState("");
-  const [alumnaName, setAlumnaName]       = useState("");
-  const [comprobanteFile, setComprobanteFile]       = useState(null);
+  const [buyerDni, setBuyerDni] = useState("");
+  const [buyerEmail, setBuyerEmail] = useState("");
+  const [alumnaName, setAlumnaName] = useState("");
+  const [comprobanteFile, setComprobanteFile] = useState(null);
   const [comprobantePreview, setComprobantePreview] = useState(null);
   const toastRef = useRef(null);
 
@@ -194,7 +187,7 @@ export default function App() {
         });
         setMySeats(prev => prev.filter(s => s !== seatId));
         logEvent(userId, LOG_EVENTS.DESELECCIONO_BUTACA, { seatId });
-      } catch(e) { console.error(e); }
+      } catch (e) { console.error(e); }
       return;
     }
     if (seat?.status === "sold") { showToast("Esta butaca ya fue vendida.", "error"); return; }
@@ -212,7 +205,7 @@ export default function App() {
       });
       setMySeats(prev => [...prev, seatId]);
       logEvent(userId, LOG_EVENTS.SELECCIONO_BUTACA, { seatId });
-    } catch(e) {
+    } catch (e) {
       showToast("Alguien ya seleccionó esta ubicación. Intentá con otra 😊", "warn");
     }
   };
@@ -243,11 +236,16 @@ export default function App() {
         userId, buyerName: fullName, buyerDni, buyerEmail, alumnaName,
         seats: mySeats, total, comprobanteUrl, timestamp: serverTimestamp(),
       });
-      await enviarMailAdmin({ buyerName: fullName, buyerDni, alumnaName, buyerEmail, seats: mySeats, total, comprobanteUrl });
-      await enviarMailComprador({ buyerName, buyerEmail, alumnaName, seats: mySeats, total });
+      
+      // Enviar correos en paralelo
+      await Promise.all([
+        enviarMailAdmin({ buyerName: fullName, buyerDni, alumnaName, buyerEmail, seats: mySeats, total, comprobanteUrl }),
+        enviarMailComprador({ buyerName, buyerEmail, alumnaName, seats: mySeats, total })
+      ]);
+
       logEvent(userId, LOG_EVENTS.COMPRA_CONFIRMADA, { seats: mySeats, buyer: fullName });
       setPhase("done");
-    } catch(e) {
+    } catch (e) {
       console.error(e);
       setError("Hubo un error. Intentá de nuevo.");
       logEvent(userId, LOG_EVENTS.ERROR, { msg: e.message });
@@ -258,50 +256,50 @@ export default function App() {
   const total = mySeats.length * CONFIG.PRECIO;
 
   return (
-    <div style={{ minHeight:"100vh", background:"var(--dark)" }}>
+    <div style={{ minHeight: "100vh", background: "var(--dark)" }}>
       <div className="top-stripe" />
       <header className="site-header">
         <p className="eyebrow">Entradas Online</p>
-        <h1 className="site-title" style={{ fontSize:"clamp(42px,9vw,90px)", letterSpacing:".04em" }}>{CONFIG.EVENTO_NOMBRE}</h1>
-        <p style={{ fontFamily:"'Cormorant Garamond',serif", fontSize:"clamp(18px,3vw,28px)", color:"var(--gold-light)", letterSpacing:".12em", textTransform:"uppercase", marginBottom:16 }}>
+        <h1 className="site-title" style={{ fontSize: "clamp(42px,9vw,90px)", letterSpacing: ".04em" }}>{CONFIG.EVENTO_NOMBRE}</h1>
+        <p style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: "clamp(18px,3vw,28px)", color: "var(--gold-light)", letterSpacing: ".12em", textTransform: "uppercase", marginBottom: 16 }}>
           {CONFIG.EVENTO_SUBTITULO}
         </p>
-        <div style={{ width:60, height:2, background:"#e0458a", margin:"0 auto 18px" }} />
-        <p style={{ fontFamily:"'Archivo Narrow',sans-serif", fontSize:13, color:"var(--text-mid)", letterSpacing:".08em", marginBottom:6 }}>
+        <div style={{ width: 60, height: 2, background: "#e0458a", margin: "0 auto 18px" }} />
+        <p style={{ fontFamily: "'Archivo Narrow',sans-serif", fontSize: 13, color: "var(--text-mid)", letterSpacing: ".08em", marginBottom: 6 }}>
           FUNCIÓN · {CONFIG.EVENTO_FECHA}
         </p>
-        <p style={{ fontFamily:"'Archivo Narrow',sans-serif", fontSize:13, color:"var(--text-mid)", letterSpacing:".06em", marginBottom:16 }}>
+        <p style={{ fontFamily: "'Archivo Narrow',sans-serif", fontSize: 13, color: "var(--text-mid)", letterSpacing: ".06em", marginBottom: 16 }}>
           {CONFIG.EVENTO_LUGAR}
         </p>
-        <div style={{ display:"inline-block", background:"var(--gold-dim)", border:"1px solid var(--gold)", padding:"8px 24px" }}>
-          <span style={{ fontSize:15, color:"var(--gold-light)", fontFamily:"'Archivo Narrow',sans-serif", letterSpacing:".06em" }}>
+        <div style={{ display: "inline-block", background: "var(--gold-dim)", border: "1px solid var(--gold)", padding: "8px 24px" }}>
+          <span style={{ fontSize: 15, color: "var(--gold-light)", fontFamily: "'Archivo Narrow',sans-serif", letterSpacing: ".06em" }}>
             Valor reserva online: ${CONFIG.PRECIO.toLocaleString("es-AR")} por entrada
           </span>
         </div>
       </header>
 
-      <main style={{ maxWidth:1100, margin:"0 auto", padding:"36px 16px 120px" }}>
+      <main style={{ maxWidth: 1100, margin: "0 auto", padding: "36px 16px 120px" }}>
         {phase === "loading" && <Loader />}
 
         {phase === "mapa" && (
           <div>
-            <p style={{ textAlign:"center", fontSize:13, color:"var(--text-mid)", marginBottom:16 }}>
+            <p style={{ textAlign: "center", fontSize: 13, color: "var(--text-mid)", marginBottom: 16 }}>
               Tocá las butacas que querés reservar. Se bloquean al instante para que nadie más las tome.
             </p>
-            <div style={{ maxWidth:520, margin:"0 auto 28px", background:"rgba(42,122,110,0.08)", border:"1px solid var(--border)", padding:"12px 20px", fontSize:13, color:"var(--gold-light)", lineHeight:1.7, textAlign:"center" }}>
-              💡 Al tocar una butaca, esperá que se ponga <strong style={{color:"#e0458a"}}>rosa</strong> para confirmar que quedó reservada para vos. Si no cambia de color, significa que otra persona la seleccionó al mismo tiempo — elegí otra.
+            <div style={{ maxWidth: 520, margin: "0 auto 28px", background: "rgba(42,122,110,0.08)", border: "1px solid var(--border)", padding: "12px 20px", fontSize: 13, color: "var(--gold-light)", lineHeight: 1.7, textAlign: "center" }}>
+              💡 Al tocar una butaca, esperá que se ponga <strong style={{ color: "#e0458a" }}>rosa</strong> para confirmar que quedó reservada para vos. Si no cambia de color, significa que otra persona la seleccionó al mismo tiempo — elegí otra.
             </div>
             <SalaMap seats={seats} mySeats={mySeats} onToggle={toggleSeat} userId={userId} />
             {mySeats.length > 0 && (
               <div className="selection-panel">
-                <h3 style={{ fontSize:22, marginBottom:14 }}>Tu selección</h3>
-                <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:16 }}>
+                <h3 style={{ fontSize: 22, marginBottom: 14 }}>Tu selección</h3>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
                   {mySeats.map(s => <span key={s} className="chip">{s}</span>)}
                 </div>
-                <p style={{ fontSize:18, color:"var(--gold)", marginBottom:20 }}>
+                <p style={{ fontSize: 18, color: "var(--gold)", marginBottom: 20 }}>
                   Total: <strong>${total.toLocaleString("es-AR")} ARS</strong>
                 </p>
-                <button className="btn-primary" onClick={() => setPhase("formulario")} style={{ width:"100%" }}>
+                <button className="btn-primary" onClick={() => setPhase("formulario")} style={{ width: "100%" }}>
                   Continuar → Datos y pago
                 </button>
               </div>
@@ -310,75 +308,75 @@ export default function App() {
         )}
 
         {phase === "formulario" && (
-          <div style={{ maxWidth:520, margin:"0 auto" }}>
-            <button className="btn-ghost" onClick={() => setPhase("mapa")} style={{ marginBottom:20, fontSize:11 }}>
+          <div style={{ maxWidth: 520, margin: "0 auto" }}>
+            <button className="btn-ghost" onClick={() => setPhase("mapa")} style={{ marginBottom: 20, fontSize: 11 }}>
               ← Volver al mapa
             </button>
             <div className="card">
-              <h2 style={{ fontSize:26, marginBottom:6 }}>Tus datos</h2>
-              <p style={{ fontSize:13, color:"var(--cream)", marginBottom:24 }}>
-                Butacas: <strong style={{ color:"var(--gold)" }}>{mySeats.join(", ")}</strong>
-                {" · "}Total: <strong style={{ color:"var(--gold)" }}>${total.toLocaleString("es-AR")}</strong>
+              <h2 style={{ fontSize: 26, marginBottom: 6 }}>Tus datos</h2>
+              <p style={{ fontSize: 13, color: "var(--cream)", marginBottom: 24 }}>
+                Butacas: <strong style={{ color: "var(--gold)" }}>{mySeats.join(", ")}</strong>
+                {" · "}Total: <strong style={{ color: "var(--gold)" }}>${total.toLocaleString("es-AR")}</strong>
               </p>
-              <div style={{ display:"grid", gap:12, marginBottom:24 }}>
-                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <div style={{ display: "grid", gap: 12, marginBottom: 24 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <div>
-                    <label style={{ fontSize:11, letterSpacing:".1em", color:"#fff", display:"block", marginBottom:6 }}>NOMBRE</label>
+                    <label style={{ fontSize: 11, letterSpacing: ".1em", color: "#fff", display: "block", marginBottom: 6 }}>NOMBRE</label>
                     <input placeholder="Tu nombre" value={buyerName} onChange={e => setBuyerName(e.target.value)} />
                   </div>
                   <div>
-                    <label style={{ fontSize:11, letterSpacing:".1em", color:"#fff", display:"block", marginBottom:6 }}>APELLIDO</label>
+                    <label style={{ fontSize: 11, letterSpacing: ".1em", color: "#fff", display: "block", marginBottom: 6 }}>APELLIDO</label>
                     <input placeholder="Tu apellido" value={buyerApellido} onChange={e => setBuyerApellido(e.target.value)} />
                   </div>
                 </div>
                 <div>
-                  <label style={{ fontSize:11, letterSpacing:".1em", color:"#fff", display:"block", marginBottom:6 }}>DNI</label>
+                  <label style={{ fontSize: 11, letterSpacing: ".1em", color: "#fff", display: "block", marginBottom: 6 }}>DNI</label>
                   <input placeholder="Número de DNI" value={buyerDni} onChange={e => setBuyerDni(e.target.value)} />
                 </div>
                 <div>
-                  <label style={{ fontSize:11, letterSpacing:".1em", color:"var(--text-mid)", display:"block", marginBottom:6 }}>EMAIL — te enviaremos la confirmación aquí</label>
+                  <label style={{ fontSize: 11, letterSpacing: ".1em", color: "var(--text-mid)", display: "block", marginBottom: 6 }}>EMAIL — te enviaremos la confirmación aquí</label>
                   <input placeholder="tucorreo@email.com" type="email" value={buyerEmail} onChange={e => setBuyerEmail(e.target.value)} />
                 </div>
                 <div>
-                  <label style={{ fontSize:11, letterSpacing:".1em", color:"#fff", display:"block", marginBottom:6 }}>NOMBRE Y APELLIDO DE LA ALUMNA QUE BAILA</label>
+                  <label style={{ fontSize: 11, letterSpacing: ".1em", color: "#fff", display: "block", marginBottom: 6 }}>NOMBRE Y APELLIDO DE LA ALUMNA QUE BAILA</label>
                   <input placeholder="Nombre completo de la alumna" value={alumnaName} onChange={e => setAlumnaName(e.target.value)} />
                 </div>
               </div>
-              <div style={{ borderTop:"1px solid var(--border)", paddingTop:24, marginBottom:24 }}>
-                <h3 style={{ fontSize:18, marginBottom:12 }}>Comprobante de pago</h3>
-                <div style={{ background:"rgba(224,69,138,0.12)", border:"2px solid #e0458a", borderRadius:2, padding:"16px 20px", marginBottom:20 }}>
-                  <p style={{ fontSize:14, color:"#fff", fontWeight:600, letterSpacing:".02em", lineHeight:1.7, fontFamily:"'Archivo Narrow',sans-serif" }}>
+              <div style={{ borderTop: "1px solid var(--border)", paddingTop: 24, marginBottom: 24 }}>
+                <h3 style={{ fontSize: 18, marginBottom: 12 }}>Comprobante de pago</h3>
+                <div style={{ background: "rgba(224,69,138,0.12)", border: "2px solid #e0458a", borderRadius: 2, padding: "16px 20px", marginBottom: 20 }}>
+                  <p style={{ fontSize: 14, color: "#fff", fontWeight: 600, letterSpacing: ".02em", lineHeight: 1.7, fontFamily: "'Archivo Narrow',sans-serif" }}>
                     ⚠️ SIN CERRAR ESTA VENTANA, realizá el pago por transferencia al alias:<br />
-                    <span style={{ fontSize:18, color:"#e0458a", letterSpacing:".08em" }}>MUSSAS2023</span><br />
+                    <span style={{ fontSize: 18, color: "#e0458a", letterSpacing: ".08em" }}>MUSSAS2023</span><br />
                     y luego adjuntá el comprobante acá abajo.
                   </p>
                 </div>
-                <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:16, lineHeight:1.6 }}>
+                <p style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 16, lineHeight: 1.6 }}>
                   Adjuntá la foto o captura del comprobante. Máximo 5MB.
                 </p>
-                <label style={{ display:"block", border:"2px dashed var(--border)", padding:28, textAlign:"center", cursor:"pointer", color:"var(--text-dim)", fontSize:13, transition:"border-color .2s" }}
-                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor="var(--gold)"; }}
-                  onDragLeave={e => { e.currentTarget.style.borderColor="var(--border)"; }}
-                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor="var(--border)"; const f=e.dataTransfer.files[0]; if(f){setComprobanteFile(f);setComprobantePreview(URL.createObjectURL(f));} }}
+                <label style={{ display: "block", border: "2px dashed var(--border)", padding: 28, textAlign: "center", cursor: "pointer", color: "var(--text-dim)", fontSize: 13, transition: "border-color .2s" }}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor = "var(--gold)"; }}
+                  onDragLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; }}
+                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor = "var(--border)"; const f = e.dataTransfer.files[0]; if (f) { setComprobanteFile(f); setComprobantePreview(URL.createObjectURL(f)); } }}
                 >
-                  <input type="file" accept="image/*,.pdf" style={{ display:"none" }}
-                    onChange={e => { const f=e.target.files[0]; if(f){setComprobanteFile(f);setComprobantePreview(URL.createObjectURL(f));} }} />
+                  <input type="file" accept="image/*,.pdf" style={{ display: "none" }}
+                    onChange={e => { const f = e.target.files[0]; if (f) { setComprobanteFile(f); setComprobantePreview(URL.createObjectURL(f)); } }} />
                   {comprobantePreview ? (
                     <div>
-                      <img src={comprobantePreview} alt="preview" style={{ maxHeight:160, maxWidth:"100%", marginBottom:8, objectFit:"contain" }} />
-                      <p style={{ fontSize:12, color:"var(--gold)" }}>✓ {comprobanteFile.name}</p>
+                      <img src={comprobantePreview} alt="preview" style={{ maxHeight: 160, maxWidth: "100%", marginBottom: 8, objectFit: "contain" }} />
+                      <p style={{ fontSize: 12, color: "var(--gold)" }}>✓ {comprobanteFile.name}</p>
                     </div>
                   ) : (
                     <div>
-                      <div style={{ fontSize:32, marginBottom:8 }}>📎</div>
+                      <div style={{ fontSize: 32, marginBottom: 8 }}>📎</div>
                       <p>Tocá para adjuntar o arrastrá la imagen</p>
-                      <p style={{ fontSize:11, marginTop:4, color:"#444" }}>JPG, PNG o PDF · máx. 5MB</p>
+                      <p style={{ fontSize: 11, marginTop: 4, color: "#444" }}>JPG, PNG o PDF · máx. 5MB</p>
                     </div>
                   )}
                 </label>
               </div>
-              {error && <p style={{ color:"#e05050", fontSize:13, marginBottom:12 }}>{error}</p>}
-              <button className="btn-primary" onClick={confirmarCompra} disabled={uploading} style={{ width:"100%" }}>
+              {error && <p style={{ color: "#e05050", fontSize: 13, marginBottom: 12 }}>{error}</p>}
+              <button className="btn-primary" onClick={confirmarCompra} disabled={uploading} style={{ width: "100%" }}>
                 {uploading ? "Procesando reserva…" : "Confirmar reserva"}
               </button>
             </div>
@@ -387,30 +385,30 @@ export default function App() {
 
         {phase === "done" && (
           <div className="ticket">
-            <div style={{ fontSize:52, marginBottom:14 }}>🎟️</div>
-            <h2 style={{ fontSize:34, marginBottom:8 }}>¡Reserva confirmada!</h2>
-            <p style={{ fontSize:14, color:"var(--gold-light)", marginBottom:24, lineHeight:1.6 }}>
+            <div style={{ fontSize: 52, marginBottom: 14 }}>🎟️</div>
+            <h2 style={{ fontSize: 34, marginBottom: 8 }}>¡Reserva confirmada!</h2>
+            <p style={{ fontSize: 14, color: "var(--gold-light)", marginBottom: 24, lineHeight: 1.6 }}>
               Te enviamos un mail de confirmación a <strong>{buyerEmail}</strong>
             </p>
-            <div style={{ borderTop:"1px solid var(--border)", borderBottom:"1px solid var(--border)", padding:"20px 0", marginBottom:20 }}>
-              <p style={{ fontSize:11, color:"var(--text-dim)", letterSpacing:".12em", marginBottom:10 }}>TUS BUTACAS</p>
-              <div style={{ display:"flex", flexWrap:"wrap", gap:8, justifyContent:"center" }}>
+            <div style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)", padding: "20px 0", marginBottom: 20 }}>
+              <p style={{ fontSize: 11, color: "var(--text-dim)", letterSpacing: ".12em", marginBottom: 10 }}>TUS BUTACAS</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
                 {mySeats.map(s => <span key={s} className="seat-tag">{s}</span>)}
               </div>
-              <p style={{ fontSize:16, color:"var(--gold)", marginTop:14 }}>${total.toLocaleString("es-AR")} ARS</p>
+              <p style={{ fontSize: 16, color: "var(--gold)", marginTop: 14 }}>${total.toLocaleString("es-AR")} ARS</p>
             </div>
-            <p style={{ fontSize:13, color:"var(--text-mid)", lineHeight:1.8 }}>
+            <p style={{ fontSize: 13, color: "var(--text-mid)", lineHeight: 1.8 }}>
               Para obtener tus entradas físicas, acercate a Mussas<br />
-              <strong style={{ color:"var(--gold-light)" }}>lunes a viernes de 17 a 20 hs.</strong><br />
+              <strong style={{ color: "var(--gold-light)" }}>lunes a viernes de 17 a 20 hs.</strong><br />
               para abonar el saldo.<br /><br />
-              Las entradas físicas son <strong style={{ color:"var(--gold-light)" }}>indispensables para ingresar al evento</strong>.
+              Las entradas físicas son <strong style={{ color: "var(--gold-light)" }}>indispensables para ingresar al evento</strong>.
             </p>
           </div>
         )}
       </main>
 
       {toast && (
-        <div style={{ position:"fixed", bottom:80, left:"50%", transform:"translateX(-50%)", background: toast.type==="error"?"#3a1010":toast.type==="warn"?"#2e2010":"var(--dark3)", border:`1px solid ${toast.type==="error"?"var(--red)":toast.type==="warn"?"var(--gold)":"#333"}`, color: toast.type==="warn"?"var(--gold-light)":"var(--cream)", padding:"12px 24px", fontSize:14, zIndex:100, maxWidth:340, textAlign:"center", boxShadow:"0 4px 24px rgba(0,0,0,.5)", lineHeight:1.5 }}>
+        <div style={{ position: "fixed", bottom: 80, left: "50%", transform: "translateX(-50%)", background: toast.type === "error" ? "#3a1010" : toast.type === "warn" ? "#2e2010" : "var(--dark3)", border: `1px solid ${toast.type === "error" ? "var(--red)" : toast.type === "warn" ? "var(--gold)" : "#333"}`, color: toast.type === "warn" ? "var(--gold-light)" : "var(--cream)", padding: "12px 24px", fontSize: 14, zIndex: 100, maxWidth: 340, textAlign: "center", boxShadow: "0 4px 24px rgba(0,0,0,.5)", lineHeight: 1.5 }}>
           {toast.msg}
         </div>
       )}
@@ -439,19 +437,19 @@ function AdminPanel() {
 
   useEffect(() => {
     if (!authed) return;
-    const unsub = onSnapshot(doc(db,"entradas","sala"), s => s.exists() && setSeats(s.data().seats||{}));
+    const unsub = onSnapshot(doc(db, "entradas", "sala"), s => s.exists() && setSeats(s.data().seats || {}));
     getLogs(300).then(setLogs);
-    getDocs(query(collection(db,"compras"), orderBy("timestamp","desc"), limit(200)))
-      .then(snap => setCompras(snap.docs.map(d => ({ id:d.id, ...d.data() }))));
+    getDocs(query(collection(db, "compras"), orderBy("timestamp", "desc"), limit(200)))
+      .then(snap => setCompras(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     return unsub;
   }, [authed]);
 
   const activarButaca = async (seatId) => {
     await runTransaction(db, async tx => {
-      const ss = await tx.get(doc(db,"entradas","sala"));
+      const ss = await tx.get(doc(db, "entradas", "sala"));
       const upd = { ...ss.data().seats };
-      upd[seatId] = { status:"free", userId:null, blockedUntil:null };
-      tx.update(doc(db,"entradas","sala"), { seats: upd });
+      upd[seatId] = { status: "free", userId: null, blockedUntil: null };
+      tx.update(doc(db, "entradas", "sala"), { seats: upd });
     });
     logEvent("ADMIN", LOG_EVENTS.ADMIN_ACTIVO_BUTACA, { seatId });
   };
@@ -459,100 +457,100 @@ function AdminPanel() {
   const anularButaca = async (seatId) => {
     if (!confirm(`¿Anular butaca ${seatId}?`)) return;
     await runTransaction(db, async tx => {
-      const ss = await tx.get(doc(db,"entradas","sala"));
+      const ss = await tx.get(doc(db, "entradas", "sala"));
       const upd = { ...ss.data().seats };
-      upd[seatId] = { status:"sold", userId:"ADMIN-ANULADA", blockedUntil:null };
-      tx.update(doc(db,"entradas","sala"), { seats: upd });
+      upd[seatId] = { status: "sold", userId: "ADMIN-ANULADA", blockedUntil: null };
+      tx.update(doc(db, "entradas", "sala"), { seats: upd });
     });
     logEvent("ADMIN", LOG_EVENTS.ADMIN_ANULO_BUTACA, { seatId });
   };
 
   if (!authed) return (
-    <div style={{ minHeight:"100vh", background:"var(--dark)", display:"flex", alignItems:"center", justifyContent:"center" }}>
-      <div className="top-stripe" style={{ position:"fixed", top:0, left:0, right:0 }} />
-      <div className="card" style={{ maxWidth:360, width:"100%", textAlign:"center" }}>
-        <div style={{ fontSize:36, marginBottom:12 }}>🔐</div>
-        <h2 style={{ fontSize:24, marginBottom:20 }}>Panel Admin</h2>
-        <input type="password" placeholder="Contraseña" value={pass} onChange={e=>setPass(e.target.value)} onKeyDown={e=>e.key==="Enter"&&login()} style={{ marginBottom:12 }} />
-        {passError && <p style={{ color:"#e05050", fontSize:13, marginBottom:10 }}>{passError}</p>}
-        <button className="btn-primary" onClick={login} style={{ width:"100%" }}>Ingresar</button>
+    <div style={{ minHeight: "100vh", background: "var(--dark)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div className="top-stripe" style={{ position: "fixed", top: 0, left: 0, right: 0 }} />
+      <div className="card" style={{ maxWidth: 360, width: "100%", textAlign: "center" }}>
+        <div style={{ fontSize: 36, marginBottom: 12 }}>🔐</div>
+        <h2 style={{ fontSize: 24, marginBottom: 20 }}>Panel Admin</h2>
+        <input type="password" placeholder="Contraseña" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === "Enter" && login()} style={{ marginBottom: 12 }} />
+        {passError && <p style={{ color: "#e05050", fontSize: 13, marginBottom: 10 }}>{passError}</p>}
+        <button className="btn-primary" onClick={login} style={{ width: "100%" }}>Ingresar</button>
       </div>
     </div>
   );
 
-  const soldSeats = Object.entries(seats).filter(([,s])=>s.status==="sold");
-  const blockedSeats = Object.entries(seats).filter(([,s])=>s.status==="blocked");
-  const freeSeats = Object.entries(seats).filter(([,s])=>s.status==="free");
+  const soldSeats = Object.entries(seats).filter(([, s]) => s.status === "sold");
+  const blockedSeats = Object.entries(seats).filter(([, s]) => s.status === "blocked");
+  const freeSeats = Object.entries(seats).filter(([, s]) => s.status === "free");
 
   return (
-    <div style={{ minHeight:"100vh", background:"var(--dark)" }}>
+    <div style={{ minHeight: "100vh", background: "var(--dark)" }}>
       <div className="top-stripe" />
-      <header style={{ padding:"20px 24px", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:12 }}>
+      <header style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <p className="eyebrow" style={{ marginBottom:4 }}>Panel Admin</p>
-          <h1 style={{ fontFamily:"'Cormorant Garamond',serif", fontWeight:300, fontSize:26 }}>Mussas — Función 2026</h1>
+          <p className="eyebrow" style={{ marginBottom: 4 }}>Panel Admin</p>
+          <h1 style={{ fontFamily: "'Cormorant Garamond',serif", fontWeight: 300, fontSize: 26 }}>Mussas — Función 2026</h1>
         </div>
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          <button className="btn-ghost" style={{ fontSize:11, borderColor:"var(--green-light)", color:"var(--green-light)" }}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="btn-ghost" style={{ fontSize: 11, borderColor: "var(--green-light)", color: "var(--green-light)" }}
             onClick={() => exportarExcel(compras, seats)}>📊 Descargar Excel</button>
-          <button className="btn-ghost" style={{ fontSize:11, borderColor:"var(--red)", color:"var(--red)" }} disabled={resetting}
-            onClick={async()=>{ if(!confirm("¿Resetear toda la sala?"))return; setResetting(true); await resetSala(); setResetting(false); }}>
-            {resetting?"Reseteando…":"🗑 Resetear sala"}
+          <button className="btn-ghost" style={{ fontSize: 11, borderColor: "var(--red)", color: "var(--red)" }} disabled={resetting}
+            onClick={async () => { if (!confirm("¿Resetear toda la sala?")) return; setResetting(true); await resetSala(); setResetting(false); }}>
+            {resetting ? "Reseteando…" : "🗑 Resetear sala"}
           </button>
-          <a href="/"><button className="btn-ghost" style={{ fontSize:11 }}>← Volver al sitio</button></a>
+          <a href="/"><button className="btn-ghost" style={{ fontSize: 11 }}>← Volver al sitio</button></a>
         </div>
       </header>
 
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:1, background:"var(--border)" }}>
-        {[{label:"Vendidas",value:soldSeats.length,color:"var(--red)"},{label:"Reservadas",value:blockedSeats.length,color:"var(--gold)"},{label:"Libres",value:freeSeats.length,color:"var(--green-light)"},{label:"Compras",value:compras.length,color:"var(--cream)"}].map(({label,value,color})=>(
-          <div key={label} style={{ background:"var(--dark2)", padding:"18px 20px", textAlign:"center" }}>
-            <div style={{ fontSize:30, fontFamily:"'Archivo Narrow',sans-serif", fontWeight:600, color }}>{value}</div>
-            <div style={{ fontSize:10, letterSpacing:".12em", color:"var(--text-dim)", marginTop:4 }}>{label.toUpperCase()}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 1, background: "var(--border)" }}>
+        {[{ label: "Vendidas", value: soldSeats.length, color: "var(--red)" }, { label: "Reservadas", value: blockedSeats.length, color: "var(--gold)" }, { label: "Libres", value: freeSeats.length, color: "var(--green-light)" }, { label: "Compras", value: compras.length, color: "var(--cream)" }].map(({ label, value, color }) => (
+          <div key={label} style={{ background: "var(--dark2)", padding: "18px 20px", textAlign: "center" }}>
+            <div style={{ fontSize: 30, fontFamily: "'Archivo Narrow',sans-serif", fontWeight: 600, color }}>{value}</div>
+            <div style={{ fontSize: 10, letterSpacing: ".12em", color: "var(--text-dim)", marginTop: 4 }}>{label.toUpperCase()}</div>
           </div>
         ))}
       </div>
 
-      <div style={{ display:"flex", borderBottom:"1px solid var(--border)", padding:"0 24px" }}>
-        {[["sala","Sala"],["compras","Compras"],["logs","Log"]].map(([id,label])=>(
-          <button key={id} onClick={()=>setTab(id)} style={{ background:"none", border:"none", borderBottom:tab===id?"2px solid var(--gold)":"2px solid transparent", color:tab===id?"var(--gold)":"var(--text-dim)", fontFamily:"'Archivo Narrow',sans-serif", fontSize:13, letterSpacing:".08em", padding:"14px 20px", cursor:"pointer", textTransform:"uppercase" }}>{label}</button>
+      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 24px" }}>
+        {[["sala", "Sala"], ["compras", "Compras"], ["logs", "Log"]].map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)} style={{ background: "none", border: "none", borderBottom: tab === id ? "2px solid var(--gold)" : "2px solid transparent", color: tab === id ? "var(--gold)" : "var(--text-dim)", fontFamily: "'Archivo Narrow',sans-serif", fontSize: 13, letterSpacing: ".08em", padding: "14px 20px", cursor: "pointer", textTransform: "uppercase" }}>{label}</button>
         ))}
       </div>
 
-      <div style={{ padding:24, maxWidth:1100, margin:"0 auto" }}>
-        {tab==="sala" && (
+      <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+        {tab === "sala" && (
           <div>
-            <p style={{ fontSize:13, color:"var(--text-mid)", marginBottom:20 }}>Tocá una butaca para gestionarla.</p>
-            <SalaMap seats={seats} mySeats={[]} onToggle={()=>{}} userId="ADMIN" adminMode onActivar={activarButaca} onAnular={anularButaca} />
+            <p style={{ fontSize: 13, color: "var(--text-mid)", marginBottom: 20 }}>Tocá una butaca para gestionarla.</p>
+            <SalaMap seats={seats} mySeats={[]} onToggle={() => { }} userId="ADMIN" adminMode onActivar={activarButaca} onAnular={anularButaca} />
           </div>
         )}
 
-        {tab==="compras" && (
+        {tab === "compras" && (
           <div>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
-              <p style={{ fontSize:13, color:"var(--text-mid)" }}>{compras.length} compra{compras.length!==1?"s":""} registrada{compras.length!==1?"s":""}</p>
-              <button className="btn-ghost" style={{ fontSize:11 }} onClick={() => exportarExcel(compras, seats)}>📊 Descargar Excel</button>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <p style={{ fontSize: 13, color: "var(--text-mid)" }}>{compras.length} compra{compras.length !== 1 ? "s" : ""} registrada{compras.length !== 1 ? "s" : ""}</p>
+              <button className="btn-ghost" style={{ fontSize: 11 }} onClick={() => exportarExcel(compras, seats)}>📊 Descargar Excel</button>
             </div>
-            {compras.length===0 && <p style={{ color:"var(--text-dim)", fontSize:13 }}>No hay compras registradas.</p>}
-            <div style={{ display:"grid", gap:10 }}>
-              {compras.map(c=>(
-                <div key={c.id} style={{ background:"var(--dark2)", border:"1px solid var(--border)", padding:"20px 24px" }}>
-                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"start", flexWrap:"wrap", gap:8, marginBottom:12 }}>
+            {compras.length === 0 && <p style={{ color: "var(--text-dim)", fontSize: 13 }}>No hay compras registradas.</p>}
+            <div style={{ display: "grid", gap: 10 }}>
+              {compras.map(c => (
+                <div key={c.id} style={{ background: "var(--dark2)", border: "1px solid var(--border)", padding: "20px 24px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
                     <div>
-                      <p style={{ fontSize:16, fontWeight:600, marginBottom:2 }}>{c.buyerName}</p>
-                      <p style={{ fontSize:13, color:"var(--text-mid)" }}>DNI: {c.buyerDni} · {c.buyerEmail}</p>
+                      <p style={{ fontSize: 16, fontWeight: 600, marginBottom: 2 }}>{c.buyerName}</p>
+                      <p style={{ fontSize: 13, color: "var(--text-mid)" }}>DNI: {c.buyerDni} · {c.buyerEmail}</p>
                     </div>
-                    <div style={{ textAlign:"right" }}>
-                      <p style={{ fontSize:16, color:"var(--gold)", fontWeight:600 }}>${(c.total||0).toLocaleString("es-AR")} ARS</p>
-                      <p style={{ fontSize:11, color:"var(--text-dim)" }}>{c.timestamp?.toDate?c.timestamp.toDate().toLocaleString("es-AR"):"—"}</p>
+                    <div style={{ textAlign: "right" }}>
+                      <p style={{ fontSize: 16, color: "var(--gold)", fontWeight: 600 }}>${(c.total || 0).toLocaleString("es-AR")} ARS</p>
+                      <p style={{ fontSize: 11, color: "var(--text-dim)" }}>{c.timestamp?.toDate ? c.timestamp.toDate().toLocaleString("es-AR") : "—"}</p>
                     </div>
                   </div>
-                  <div style={{ borderTop:"1px solid var(--border)", paddingTop:10, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:8 }}>
+                  <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                     <div>
-                      <p style={{ fontSize:13, color:"var(--gold-light)", marginBottom:2 }}>Alumna: <strong>{c.alumnaName}</strong></p>
-                      <p style={{ fontSize:12, color:"var(--text-dim)" }}>Butacas: <strong style={{color:"var(--cream)"}}>{(c.seats||[]).join(", ")}</strong></p>
+                      <p style={{ fontSize: 13, color: "var(--gold-light)", marginBottom: 2 }}>Alumna: <strong>{c.alumnaName}</strong></p>
+                      <p style={{ fontSize: 12, color: "var(--text-dim)" }}>Butacas: <strong style={{ color: "var(--cream)" }}>{(c.seats || []).join(", ")}</strong></p>
                     </div>
                     {c.comprobanteUrl && (
-                      <button className="btn-ghost" style={{ fontSize:11 }}
+                      <button className="btn-ghost" style={{ fontSize: 11 }}
                         onClick={() => window.open(c.comprobanteUrl, "_blank", "noopener,noreferrer")}>
                         Ver comprobante ↗
                       </button>
@@ -564,15 +562,15 @@ function AdminPanel() {
           </div>
         )}
 
-        {tab==="logs" && (
+        {tab === "logs" && (
           <div>
-            <button className="btn-ghost" style={{ marginBottom:16, fontSize:11 }} onClick={()=>getLogs(300).then(setLogs)}>↻ Actualizar</button>
-            <div style={{ display:"grid", gap:4 }}>
-              {logs.map(l=>(
-                <div key={l.id} style={{ background:"var(--dark2)", border:"1px solid var(--border)", padding:"10px 16px", display:"grid", gridTemplateColumns:"160px 1fr auto", gap:12, alignItems:"center", fontSize:12 }}>
-                  <span style={{ color:"var(--text-dim)", fontFamily:"monospace", fontSize:10 }}>{l.timestamp?.toDate?l.timestamp.toDate().toLocaleString("es-AR"):"—"}</span>
-                  <span><span style={{ color:"var(--gold)", marginRight:8 }}>{l.event}</span>{l.details&&Object.keys(l.details).length>0&&<span style={{ color:"var(--text-dim)" }}>· {JSON.stringify(l.details)}</span>}</span>
-                  <span style={{ color:"#444", fontFamily:"monospace", fontSize:10 }}>{(l.userId||"").slice(0,14)}</span>
+            <button className="btn-ghost" style={{ marginBottom: 16, fontSize: 11 }} onClick={() => getLogs(300).then(setLogs)}>↻ Actualizar</button>
+            <div style={{ display: "grid", gap: 4 }}>
+              {logs.map(l => (
+                <div key={l.id} style={{ background: "var(--dark2)", border: "1px solid var(--border)", padding: "10px 16px", display: "grid", gridTemplateColumns: "160px 1fr auto", gap: 12, alignItems: "center", fontSize: 12 }}>
+                  <span style={{ color: "var(--text-dim)", fontFamily: "monospace", fontSize: 10 }}>{l.timestamp?.toDate ? l.timestamp.toDate().toLocaleString("es-AR") : "—"}</span>
+                  <span><span style={{ color: "var(--gold)", marginRight: 8 }}>{l.event}</span>{l.details && Object.keys(l.details).length > 0 && <span style={{ color: "var(--text-dim)" }}>· {JSON.stringify(l.details)}</span>}</span>
+                  <span style={{ color: "#444", fontFamily: "monospace", fontSize: 10 }}>{(l.userId || "").slice(0, 14)}</span>
                 </div>
               ))}
             </div>
@@ -584,41 +582,31 @@ function AdminPanel() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MAPA DE SALA — responsive, idéntico al plano oficial
+// MAPA DE SALA — MATRIZ DE 27 COLUMNAS FIJAS (PLANO REAL PASO LA PLAZA)
 // ═══════════════════════════════════════════════════════════════════════════════
 function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnular }) {
   const [adminSeat, setAdminSeat] = useState(null);
-  const [dims, setDims] = useState({ SW: 14, SG: 2, AISLE: 24, SH: 11 });
+  const [dims, setDims] = useState({ SW: 12, SG: 2, SH: 10 });
 
-  const allFilas = [...SALA.platea.filas, ...SALA.pullman.filas];
-  const maxIzq = Math.max(...allFilas.map(f => f.izq.length));
-  const maxDer = Math.max(...allFilas.map(f => f.der.length));
-
-  // Recalcula tamaños cuando cambia el ancho de ventana
   useEffect(() => {
     const calcDims = () => {
       const screenW = window.innerWidth;
-      // Espacio disponible: pantalla - padding lateral (32px) - etiquetas (2×28px)
       const available = screenW - 32 - 56;
-      const totalCols = maxIzq + maxDer;
+      const TOTAL_COLS = 27;
       const SG = 2;
-      // Probamos con pasillo de 20px mínimo, 24px ideal
-      const AISLE = screenW < 400 ? 12 : screenW < 600 ? 18 : 24;
-      // SW = (available - gaps entre butacas - pasillo) / cantidad de butacas
-      const totalGaps = (maxIzq - 1 + maxDer - 1) * SG;
-      const SW_calc = Math.floor((available - totalGaps - AISLE) / totalCols);
+      const SW_calc = Math.floor((available - (TOTAL_COLS * SG)) / TOTAL_COLS);
       const SW = Math.max(8, Math.min(14, SW_calc));
-      const SH = Math.max(7, Math.round(SW * 0.78));
-      setDims({ SW, SG, AISLE, SH });
+      const SH = Math.max(7, Math.round(SW * 0.8));
+      setDims({ SW, SG, SH });
     };
     calcDims();
     window.addEventListener("resize", calcDims);
     return () => window.removeEventListener("resize", calcDims);
-  }, [maxIzq, maxDer]);
+  }, []);
 
   if (!seats || Object.keys(seats).length === 0) return null;
 
-  const { SW, SG, AISLE, SH } = dims;
+  const { SW, SG, SH } = dims;
 
   const getStatus = (seatId) => {
     if (mySeats.includes(seatId)) return "mine";
@@ -630,120 +618,54 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
   };
 
   const renderSector = (sector, sectorKey) => (
-    <div key={sectorKey} style={{ marginBottom:36 }}>
-      <p style={{ textAlign:"center", fontSize:10, letterSpacing:".18em", color:"var(--text-dim)", textTransform:"uppercase", marginBottom:12 }}>
+    <div key={sectorKey} style={{ marginBottom: 36 }}>
+      <p style={{ textAlign: "center", fontSize: 10, letterSpacing: ".18em", color: "var(--text-dim)", textTransform: "uppercase", marginBottom: 12 }}>
         {sector.label}
       </p>
-      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
-        {sector.filas.map(fila => {
-          const padIzq = maxIzq - fila.izq.length;
-          const padDer = maxDer - fila.der.length;
-          return (
-            <div key={fila.id} style={{ display:"flex", alignItems:"center" }}>
-              <span style={{ fontSize:8, color:"#556", width:24, textAlign:"right", marginRight:4, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+        {sector.filas.map(fila => (
+          <div key={fila.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+            {fila.pasilloSeparador && (
+              <div style={{ height: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: ".2em" }}>PASILLO</span>
+              </div>
+            )}
+            <div style={{ display: "flex", alignItems: "center" }}>
+              <span style={{ fontSize: 8, color: "#556", width: 24, textAlign: "right", marginRight: 4, fontFamily: "monospace", flexShrink: 0 }}>
+                {fila.id}
+              </span>
 
-              {/* Lado izquierdo — alineado al pasillo (justify flex-end) */}
-              <div style={{ display:"flex", gap:SG, width: maxIzq*(SW+SG), justifyContent:"flex-end", flexShrink:0 }}>
-                {Array(padIzq).fill(null).map((_,i) => (
-                  <div key={i} style={{ width:SW, height:SH, flexShrink:0 }} />
-                ))}
-                {fila.izq.map(n => {
+              <div style={{ display: "flex", gap: SG }}>
+                {fila.grid.map((n, idx) => {
+                  if (n === null) {
+                    return <div key={idx} style={{ width: SW, height: SH, flexShrink: 0 }} />;
+                  }
                   const sid = `${fila.id}-${n}`;
                   return (
-                    <div key={sid}
+                    <div
+                      key={sid}
                       className={`seat ${getStatus(sid)}`}
-                      style={{ width:SW, height:SH, flexShrink:0 }}
+                      style={{ width: SW, height: SH, flexShrink: 0 }}
                       title={`Butaca ${sid}`}
-                      onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)}
+                      onClick={() => adminMode ? setAdminSeat(adminSeat === sid ? null : sid) : onToggle(sid)}
                     />
                   );
                 })}
               </div>
 
-              {/* Pasillo central */}
-              <div style={{ width:AISLE, flexShrink:0 }} />
-
-              {/* Lado derecho — alineado al pasillo (justify flex-start) */}
-              <div style={{ display:"flex", gap:SG, width: maxDer*(SW+SG), justifyContent:"flex-start", flexShrink:0 }}>
-                {fila.der.map(n => {
-                  const sid = `${fila.id}-${n}`;
-                  return (
-                    <div key={sid}
-                      className={`seat ${getStatus(sid)}`}
-                      style={{ width:SW, height:SH, flexShrink:0 }}
-                      title={`Butaca ${sid}`}
-                      onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)}
-                    />
-                  );
-                })}
-                {Array(padDer).fill(null).map((_,i) => (
-                  <div key={i} style={{ width:SW, height:SH, flexShrink:0 }} />
-                ))}
-              </div>
-
-              <span style={{ fontSize:8, color:"#556", width:24, marginLeft:4, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
+              <span style={{ fontSize: 8, color: "#556", width: 24, marginLeft: 4, fontFamily: "monospace", flexShrink: 0 }}>
+                {fila.id}
+              </span>
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
 
       {adminMode && adminSeat && seats[adminSeat] && (
-        <div style={{ background:"var(--dark3)", border:"1px solid var(--gold)", padding:16, marginTop:16, maxWidth:380, margin:"16px auto 0" }}>
-          <p style={{ fontSize:13, marginBottom:6 }}><strong style={{ color:"var(--gold)" }}>{adminSeat}</strong> — <strong>{seats[adminSeat].status}</strong></p>
-          {seats[adminSeat].buyer && <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:2 }}>Comprador: {seats[adminSeat].buyer}</p>}
-          {seats[adminSeat].dni && <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:2 }}>DNI: {seats[adminSeat].dni}</p>}
-          {seats[adminSeat].alumna && <p style={{ fontSize:12, color:"var(--text-mid)", marginBottom:8 }}>Alumna: {seats[adminSeat].alumna}</p>}
+        <div style={{ background: "var(--dark3)", border: "1px solid var(--gold)", padding: 16, marginTop: 16, maxWidth: 380, margin: "16px auto 0" }}>
+          <p style={{ fontSize: 13, marginBottom: 6 }}><strong style={{ color: "var(--gold)" }}>{adminSeat}</strong> — <strong>{seats[adminSeat].status}</strong></p>
+          {seats[adminSeat].buyer && <p style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 2 }}>Comprador: {seats[adminSeat].buyer}</p>}
+          {seats[adminSeat].dni && <p style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 2 }}>DNI: {seats[adminSeat].dni}</p>}
+          {seats[adminSeat].alumna && <p style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 8 }}>Alumna: {seats[adminSeat].alumna}</p>}
           {seats[adminSeat].comprobanteUrl && (
-            <button className="btn-ghost" style={{ fontSize:11, width:"100%", marginBottom:8 }}
-              onClick={() => window.open(seats[adminSeat].comprobanteUrl, "_blank")}>Ver comprobante ↗</button>
-          )}
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
-            {seats[adminSeat].status!=="free" && <button className="btn-ghost" style={{ fontSize:10, borderColor:"var(--green-light)", color:"var(--green-light)" }} onClick={()=>{onActivar(adminSeat);setAdminSeat(null);}}>✓ Liberar</button>}
-            {seats[adminSeat].status!=="sold" && <button className="btn-ghost" style={{ fontSize:10, borderColor:"var(--red)", color:"var(--red)" }} onClick={()=>{onAnular(adminSeat);setAdminSeat(null);}}>✗ Anular</button>}
-            <button className="btn-ghost" style={{ fontSize:10 }} onClick={()=>setAdminSeat(null)}>Cerrar</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  return (
-    <div style={{ textAlign:"center", overflowX:"auto" }}>
-      <div style={{ marginBottom:24 }}><div className="escenario">Escenario</div></div>
-      {renderSector(SALA.platea, "platea")}
-      <div style={{ height:1, background:"var(--border)", maxWidth:500, margin:"4px auto 28px" }} />
-      {renderSector(SALA.pullman, "pullman")}
-      {!adminMode && <Legend />}
-    </div>
-  );
-}
-
-function Legend() {
-  return (
-    <div className="legend" style={{ marginTop:20 }}>
-      {[{cls:"free",label:"Libre"},{cls:"mine",label:"Tu selección"},{cls:"blocked",label:"Reservada por otro"},{cls:"sold",label:"Vendida"}].map(({cls,label})=>(
-        <div className="legend-item" key={cls}><div className={`legend-dot seat ${cls}`} /><span>{label}</span></div>
-      ))}
-    </div>
-  );
-}
-
-function StickyLegend({ show }) {
-  if (!show) return null;
-  return (
-    <div className="sticky-legend">
-      {[{cls:"free",label:"Libre"},{cls:"mine",label:"Tu selección"},{cls:"blocked",label:"Reservada"},{cls:"sold",label:"Vendida"}].map(({cls,label})=>(
-        <div className="legend-item" key={cls}><div className={`legend-dot seat ${cls}`} /><span>{label}</span></div>
-      ))}
-    </div>
-  );
-}
-
-function Loader() {
-  return (
-    <div style={{ textAlign:"center", padding:80, color:"var(--text-dim)" }}>
-      <div style={{ fontSize:32, marginBottom:12 }}>⌛</div>
-      <p style={{ fontSize:12, letterSpacing:".15em" }}>CONECTANDO…</p>
-    </div>
-  );
-}
+            <button className="btn-ghost" style={{ fontSize: 11, width
