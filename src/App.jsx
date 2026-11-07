@@ -237,7 +237,6 @@ export default function App() {
         seats: mySeats, total, comprobanteUrl, timestamp: serverTimestamp(),
       });
       
-      // Enviar correos en paralelo
       await Promise.all([
         enviarMailAdmin({ buyerName: fullName, buyerDni, alumnaName, buyerEmail, seats: mySeats, total, comprobanteUrl }),
         enviarMailComprador({ buyerName, buyerEmail, alumnaName, seats: mySeats, total })
@@ -418,7 +417,7 @@ export default function App() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ADMIN PANEL
+// PANEL ADMIN
 // ═══════════════════════════════════════════════════════════════════════════════
 function AdminPanel() {
   const [authed, setAuthed] = useState(false);
@@ -582,22 +581,25 @@ function AdminPanel() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MAPA DE SALA — MATRIZ DE 27 COLUMNAS FIJAS (PLANO REAL PASO LA PLAZA)
+// MAPA DE SALA — PLANO FIDELIGNO CON 3 BLOQUES POR FILA Y 2 PASILLOS
 // ═══════════════════════════════════════════════════════════════════════════════
 function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnular }) {
   const [adminSeat, setAdminSeat] = useState(null);
-  const [dims, setDims] = useState({ SW: 12, SG: 2, SH: 10 });
+  const [dims, setDims] = useState({ SW: 12, SG: 2, AISLE: 20, SH: 10 });
+
+  const maxIzq = 8;
+  const maxDer = 8;
 
   useEffect(() => {
     const calcDims = () => {
       const screenW = window.innerWidth;
       const available = screenW - 32 - 56;
-      const TOTAL_COLS = 27;
       const SG = 2;
-      const SW_calc = Math.floor((available - (TOTAL_COLS * SG)) / TOTAL_COLS);
-      const SW = Math.max(8, Math.min(14, SW_calc));
+      const AISLE = screenW < 480 ? 12 : 20;
+      const SW_calc = Math.floor((available - (31 * SG) - (AISLE * 2)) / 31);
+      const SW = Math.max(8, Math.min(13, SW_calc));
       const SH = Math.max(7, Math.round(SW * 0.8));
-      setDims({ SW, SG, SH });
+      setDims({ SW, SG, AISLE, SH });
     };
     calcDims();
     window.addEventListener("resize", calcDims);
@@ -606,7 +608,7 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
 
   if (!seats || Object.keys(seats).length === 0) return null;
 
-  const { SW, SG, SH } = dims;
+  const { SW, SG, AISLE, SH } = dims;
 
   const getStatus = (seatId) => {
     if (mySeats.includes(seatId)) return "mine";
@@ -623,42 +625,89 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
         {sector.label}
       </p>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-        {sector.filas.map(fila => (
-          <div key={fila.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-            {fila.pasilloSeparador && (
-              <div style={{ height: 20, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: ".2em" }}>PASILLO</span>
-              </div>
-            )}
-            <div style={{ display: "flex", alignItems: "center" }}>
-              <span style={{ fontSize: 8, color: "#556", width: 24, textAlign: "right", marginRight: 4, fontFamily: "monospace", flexShrink: 0 }}>
-                {fila.id}
-              </span>
+        {sector.filas.map(fila => {
+          const padIzq = maxIzq - fila.izq.length;
+          const padDer = maxDer - fila.der.length;
 
-              <div style={{ display: "flex", gap: SG }}>
-                {fila.grid.map((n, idx) => {
-                  if (n === null) {
-                    return <div key={idx} style={{ width: SW, height: SH, flexShrink: 0 }} />;
-                  }
-                  const sid = `${fila.id}-${n}`;
-                  return (
-                    <div
-                      key={sid}
-                      className={`seat ${getStatus(sid)}`}
-                      style={{ width: SW, height: SH, flexShrink: 0 }}
-                      title={`Butaca ${sid}`}
-                      onClick={() => adminMode ? setAdminSeat(adminSeat === sid ? null : sid) : onToggle(sid)}
-                    />
-                  );
-                })}
-              </div>
+          return (
+            <React.Fragment key={fila.id}>
+              {fila.pasilloSeparador && (
+                <div style={{ height: 22, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: ".2em" }}>PASILLO DE TRÁNSITO</span>
+                </div>
+              )}
+              <div style={{ display: "flex", alignItems: "center" }}>
+                <span style={{ fontSize: 8, color: "#556", width: 24, textAlign: "right", marginRight: 4, fontFamily: "monospace", flexShrink: 0 }}>
+                  {fila.id}
+                </span>
 
-              <span style={{ fontSize: 8, color: "#556", width: 24, marginLeft: 4, fontFamily: "monospace", flexShrink: 0 }}>
-                {fila.id}
-              </span>
-            </div>
-          </div>
-        ))}
+                {/* 1. SECTOR LATERAL IZQUIERDO */}
+                <div style={{ display: "flex", gap: SG, width: maxIzq * (SW + SG), justifyContent: "flex-end", flexShrink: 0 }}>
+                  {Array(padIzq).fill(null).map((_, i) => (
+                    <div key={`pad-izq-${i}`} style={{ width: SW, height: SH, flexShrink: 0 }} />
+                  ))}
+                  {fila.izq.map(n => {
+                    const sid = `${fila.id}-${n}`;
+                    return (
+                      <div
+                        key={sid}
+                        className={`seat ${getStatus(sid)}`}
+                        style={{ width: SW, height: SH, flexShrink: 0 }}
+                        title={`Butaca ${sid}`}
+                        onClick={() => adminMode ? setAdminSeat(adminSeat === sid ? null : sid) : onToggle(sid)}
+                      />
+                    );
+                  })}
+                </div>
+
+                {/* PASILLO IZQUIERDO */}
+                <div style={{ width: AISLE, flexShrink: 0 }} />
+
+                {/* 2. SECTOR CENTRAL */}
+                <div style={{ display: "flex", gap: SG, flexShrink: 0 }}>
+                  {fila.centro.map(n => {
+                    const sid = `${fila.id}-${n}`;
+                    return (
+                      <div
+                        key={sid}
+                        className={`seat ${getStatus(sid)}`}
+                        style={{ width: SW, height: SH, flexShrink: 0 }}
+                        title={`Butaca ${sid}`}
+                        onClick={() => adminMode ? setAdminSeat(adminSeat === sid ? null : sid) : onToggle(sid)}
+                      />
+                    );
+                  })}
+                </div>
+
+                {/* PASILLO DERECHO */}
+                <div style={{ width: AISLE, flexShrink: 0 }} />
+
+                {/* 3. SECTOR LATERAL DERECHO */}
+                <div style={{ display: "flex", gap: SG, width: maxDer * (SW + SG), justifyContent: "flex-start", flexShrink: 0 }}>
+                  {fila.der.map(n => {
+                    const sid = `${fila.id}-${n}`;
+                    return (
+                      <div
+                        key={sid}
+                        className={`seat ${getStatus(sid)}`}
+                        style={{ width: SW, height: SH, flexShrink: 0 }}
+                        title={`Butaca ${sid}`}
+                        onClick={() => adminMode ? setAdminSeat(adminSeat === sid ? null : sid) : onToggle(sid)}
+                      />
+                    );
+                  })}
+                  {Array(padDer).fill(null).map((_, i) => (
+                    <div key={`pad-der-${i}`} style={{ width: SW, height: SH, flexShrink: 0 }} />
+                  ))}
+                </div>
+
+                <span style={{ fontSize: 8, color: "#556", width: 24, marginLeft: 4, fontFamily: "monospace", flexShrink: 0 }}>
+                  {fila.id}
+                </span>
+              </div>
+            </React.Fragment>
+          );
+        })}
       </div>
 
       {adminMode && adminSeat && seats[adminSeat] && (
@@ -668,4 +717,56 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
           {seats[adminSeat].dni && <p style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 2 }}>DNI: {seats[adminSeat].dni}</p>}
           {seats[adminSeat].alumna && <p style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 8 }}>Alumna: {seats[adminSeat].alumna}</p>}
           {seats[adminSeat].comprobanteUrl && (
-            <button className="btn-ghost" style={{ fontSize: 11, width
+            <button className="btn-ghost" style={{ fontSize: 11, width: "100%", marginBottom: 8 }}
+              onClick={() => window.open(seats[adminSeat].comprobanteUrl, "_blank")}>Ver comprobante ↗</button>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+            {seats[adminSeat].status !== "free" && <button className="btn-ghost" style={{ fontSize: 10, borderColor: "var(--green-light)", color: "var(--green-light)" }} onClick={() => { onActivar(adminSeat); setAdminSeat(null); }}>✓ Liberar</button>}
+            {seats[adminSeat].status !== "sold" && <button className="btn-ghost" style={{ fontSize: 10, borderColor: "var(--red)", color: "var(--red)" }} onClick={() => { onAnular(adminSeat); setAdminSeat(null); }}>✗ Anular</button>}
+            <button className="btn-ghost" style={{ fontSize: 10 }} onClick={() => setAdminSeat(null)}>Cerrar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div style={{ textAlign: "center", overflowX: "auto" }}>
+      <div style={{ marginBottom: 24 }}><div className="escenario">Escenario</div></div>
+      {renderSector(SALA.platea, "platea")}
+      <div style={{ height: 1, background: "var(--border)", maxWidth: 500, margin: "4px auto 28px" }} />
+      {renderSector(SALA.pullman, "pullman")}
+      {!adminMode && <Legend />}
+    </div>
+  );
+}
+
+function Legend() {
+  return (
+    <div className="legend" style={{ marginTop: 20 }}>
+      {[{ cls: "free", label: "Libre" }, { cls: "mine", label: "Tu selección" }, { cls: "blocked", label: "Reservada por otro" }, { cls: "sold", label: "Vendida" }].map(({ cls, label }) => (
+        <div className="legend-item" key={cls}><div className={`legend-dot seat ${cls}`} /><span>{label}</span></div>
+      ))}
+    </div>
+  );
+}
+
+function StickyLegend({ show }) {
+  if (!show) return null;
+  return (
+    <div className="sticky-legend">
+      {[{ cls: "free", label: "Libre" }, { cls: "mine", label: "Tu selección" }, { cls: "blocked", label: "Reservada" }, { cls: "sold", label: "Vendida" }].map(({ cls, label }) => (
+        <div className="legend-item" key={cls}><div className={`legend-dot seat ${cls}`} /><span>{label}</span></div>
+      ))}
+    </div>
+  );
+}
+
+function Loader() {
+  return (
+    <div style={{ textAlign: "center", padding: 80, color: "var(--text-dim)" }}>
+      <div style={{ fontSize: 32, marginBottom: 12 }}>⌛</div>
+      <p style={{ fontSize: 12, letterSpacing: ".15em" }}>CONECTANDO…</p>
+    </div>
+  );
+}
