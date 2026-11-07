@@ -127,7 +127,7 @@ function exportarExcel(compras, seats) {
     headers.join(";"),
     ...filas.map(r => headers.map(h => `"${(r[h]||"").toString().replace(/"/g,'""')}"`).join(";"))
   ].join("\n");
-  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = "mussas-entradas-2026.csv"; a.click();
@@ -280,7 +280,7 @@ export default function App() {
         </div>
       </header>
 
-      <main style={{ maxWidth:1000, margin:"0 auto", padding:"36px 16px 120px" }}>
+      <main style={{ maxWidth:1100, margin:"0 auto", padding:"36px 16px 120px" }}>
         {phase === "loading" && <Loader />}
 
         {phase === "mapa" && (
@@ -584,11 +584,41 @@ function AdminPanel() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MAPA DE SALA — pasillo central perfectamente alineado
+// MAPA DE SALA — responsive, idéntico al plano oficial
 // ═══════════════════════════════════════════════════════════════════════════════
 function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnular }) {
   const [adminSeat, setAdminSeat] = useState(null);
+  const [dims, setDims] = useState({ SW: 14, SG: 2, AISLE: 24, SH: 11 });
+
+  const allFilas = [...SALA.platea.filas, ...SALA.pullman.filas];
+  const maxIzq = Math.max(...allFilas.map(f => f.izq.length));
+  const maxDer = Math.max(...allFilas.map(f => f.der.length));
+
+  // Recalcula tamaños cuando cambia el ancho de ventana
+  useEffect(() => {
+    const calcDims = () => {
+      const screenW = window.innerWidth;
+      // Espacio disponible: pantalla - padding lateral (32px) - etiquetas (2×28px)
+      const available = screenW - 32 - 56;
+      const totalCols = maxIzq + maxDer;
+      const SG = 2;
+      // Probamos con pasillo de 20px mínimo, 24px ideal
+      const AISLE = screenW < 400 ? 12 : screenW < 600 ? 18 : 24;
+      // SW = (available - gaps entre butacas - pasillo) / cantidad de butacas
+      const totalGaps = (maxIzq - 1 + maxDer - 1) * SG;
+      const SW_calc = Math.floor((available - totalGaps - AISLE) / totalCols);
+      const SW = Math.max(8, Math.min(14, SW_calc));
+      const SH = Math.max(7, Math.round(SW * 0.78));
+      setDims({ SW, SG, AISLE, SH });
+    };
+    calcDims();
+    window.addEventListener("resize", calcDims);
+    return () => window.removeEventListener("resize", calcDims);
+  }, [maxIzq, maxDer]);
+
   if (!seats || Object.keys(seats).length === 0) return null;
+
+  const { SW, SG, AISLE, SH } = dims;
 
   const getStatus = (seatId) => {
     if (mySeats.includes(seatId)) return "mine";
@@ -598,11 +628,6 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
     if (s.status === "blocked") return s.userId === userId ? "mine" : "blocked";
     return "free";
   };
-
-  const allFilas = [...SALA.platea.filas, ...SALA.pullman.filas];
-  const maxIzq = Math.max(...allFilas.map(f => f.izq.length));
-  const maxDer = Math.max(...allFilas.map(f => f.der.length));
-  const SW = 14, SG = 2, AISLE = 24;
 
   const renderSector = (sector, sectorKey) => (
     <div key={sectorKey} style={{ marginBottom:36 }}>
@@ -617,27 +642,43 @@ function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnu
             <div key={fila.id} style={{ display:"flex", alignItems:"center" }}>
               <span style={{ fontSize:8, color:"#556", width:24, textAlign:"right", marginRight:4, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
 
-              {/* Lado izquierdo — padding a la IZQUIERDA para que quede pegado al pasillo */}
+              {/* Lado izquierdo — alineado al pasillo (justify flex-end) */}
               <div style={{ display:"flex", gap:SG, width: maxIzq*(SW+SG), justifyContent:"flex-end", flexShrink:0 }}>
-                {Array(padIzq).fill(null).map((_,i) => <div key={i} style={{ width:SW, height:11, flexShrink:0 }} />)}
+                {Array(padIzq).fill(null).map((_,i) => (
+                  <div key={i} style={{ width:SW, height:SH, flexShrink:0 }} />
+                ))}
                 {fila.izq.map(n => {
                   const sid = `${fila.id}-${n}`;
-                  return <div key={sid} className={`seat ${getStatus(sid)}`} style={{ width:SW, height:11, flexShrink:0 }} title={`Butaca ${sid}`}
-                    onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)} />;
+                  return (
+                    <div key={sid}
+                      className={`seat ${getStatus(sid)}`}
+                      style={{ width:SW, height:SH, flexShrink:0 }}
+                      title={`Butaca ${sid}`}
+                      onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)}
+                    />
+                  );
                 })}
               </div>
 
-              {/* Pasillo central fijo */}
+              {/* Pasillo central */}
               <div style={{ width:AISLE, flexShrink:0 }} />
 
-              {/* Lado derecho — padding a la DERECHA para que quede pegado al pasillo */}
+              {/* Lado derecho — alineado al pasillo (justify flex-start) */}
               <div style={{ display:"flex", gap:SG, width: maxDer*(SW+SG), justifyContent:"flex-start", flexShrink:0 }}>
                 {fila.der.map(n => {
                   const sid = `${fila.id}-${n}`;
-                  return <div key={sid} className={`seat ${getStatus(sid)}`} style={{ width:SW, height:11, flexShrink:0 }} title={`Butaca ${sid}`}
-                    onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)} />;
+                  return (
+                    <div key={sid}
+                      className={`seat ${getStatus(sid)}`}
+                      style={{ width:SW, height:SH, flexShrink:0 }}
+                      title={`Butaca ${sid}`}
+                      onClick={() => adminMode ? setAdminSeat(adminSeat===sid?null:sid) : onToggle(sid)}
+                    />
+                  );
                 })}
-                {Array(padDer).fill(null).map((_,i) => <div key={i} style={{ width:SW, height:11, flexShrink:0 }} />)}
+                {Array(padDer).fill(null).map((_,i) => (
+                  <div key={i} style={{ width:SW, height:SH, flexShrink:0 }} />
+                ))}
               </div>
 
               <span style={{ fontSize:8, color:"#556", width:24, marginLeft:4, fontFamily:"monospace", flexShrink:0 }}>{fila.id}</span>
