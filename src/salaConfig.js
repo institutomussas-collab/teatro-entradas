@@ -52,7 +52,7 @@ export const SALA = {
       { id: "F15", grid: [25, 23, 21, 19, 17, null, 15, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, null, 16, 18, 20, 22, 24] },
       
       // Fila 16: 23 a 17 (Izq) · PASILLO · 15 a 1 y 2 a 16 (Centro) · PASILLO · 18 a 24 (Der)
-      { id: "F16", grid: [null, 23, 21, 19, 17, null, 13, 15, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, 16, null, 18, 20, 22, 24, null] },
+      { id: "F16", grid: [null, 23, 21, 19, 17, null, 15, 13, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, 16, null, 18, 20, 22, 24, null] },
       
       // Fila 17: 25 a 19 (Izq) · PASILLO · 17 a 1 y 2 a 14 (Centro) · PASILLO · 16 a 22 (Der)
       { id: "F17", grid: [25, 23, 21, 19, null, 17, 15, 13, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, null, 16, 18, 20, 22, null] },
@@ -64,8 +64,8 @@ export const SALA = {
   pullman: {
     label: "Pullman",
     filas: [
-      // Pullman Fila 1: 25 a 15 (Izq) · PASILLO · 13 a 1 y 2 a 12 (Centro) · PASILLO · 14 a 26 (Der)
-      { id: "P1", grid: [null, 25, 23, 21, 19, 17, 15, null, 13, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, null, 14, 16, 18, 20, 22, 24, 26] },
+      // Pullman Fila 1: 25 a 15 (Izq) · PASILLO · 13 a 1 y 2 a 14 (Centro) · PASILLO · 16 a 26 (Der)
+      { id: "P1", grid: [null, 25, 23, 21, 19, 17, 15, null, 13, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, null, 16, 18, 20, 22, 24, 26] },
       
       // Pullman Fila 2: 27 a 17 (Izq) · PASILLO · 15 a 1 y 2 a 14 (Centro) · PASILLO · 16 a 26 (Der)
       { id: "P2", grid: [27, 25, 23, 21, 19, 17, null, 15, 13, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, null, 16, 18, 20, 22, 24, 26] },
