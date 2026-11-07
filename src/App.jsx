@@ -3,7 +3,7 @@ import { db, storage } from "./firebase.js";
 import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import {
   doc, getDoc, setDoc, onSnapshot, runTransaction,
-  collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs
+  collection, addDoc, deleteDoc, serverTimestamp, query, orderBy, limit, getDocs
 } from "firebase/firestore";
 import { SALA, getAllSeatIds, CONFIG } from "./salaConfig.js";
 import { logEvent, getLogs, LOG_EVENTS } from "./logger.js";
@@ -70,9 +70,15 @@ async function initSalaIfNeeded() {
 }
 
 async function resetSala() {
+  // 1. Resetear el mapa de la sala en Firestore
   const seats = {};
   for (const id of getAllSeatIds()) seats[id] = { status: "free", userId: null, blockedUntil: null };
   await setDoc(doc(db, "entradas", "sala"), { seats });
+
+  // 2. Eliminar de Firestore el historial de compras previo (pruebas)
+  const comprasSnap = await getDocs(collection(db, "compras"));
+  const deletePromises = comprasSnap.docs.map(d => deleteDoc(doc(db, "compras", d.id)));
+  await Promise.all(deletePromises);
 }
 
 async function liberarBloqueadasVencidas() {
@@ -97,16 +103,27 @@ async function liberarBloqueadasVencidas() {
 // ─── Exportar Excel ───────────────────────────────────────────────────────────
 function exportarExcel(compras, seats) {
   const butacaMap = {};
+  
+  // Como compras viene ordenado por fecha descendente, guardamos únicamente la última transacción realizada
   for (const c of compras) {
-    for (const s of (c.seats || [])) butacaMap[s] = c;
+    for (const s of (c.seats || [])) {
+      if (!butacaMap[s]) {
+        butacaMap[s] = c;
+      }
+    }
   }
+
   const todasLasButacas = getAllSeatIds();
   const filas = todasLasButacas.map(seatId => {
-    const compra = butacaMap[seatId];
     const seatData = seats[seatId];
+    const esVendida = seatData?.status === "sold";
+    
+    // Si en la sala real la butaca no figura vendida, no exporta datos viejos
+    const compra = esVendida ? butacaMap[seatId] : null;
+
     return {
       Butaca: seatId,
-      Estado: seatData?.status === "sold" ? "Vendida" : seatData?.status === "blocked" ? "Reservada" : "Libre",
+      Estado: esVendida ? "Vendida" : seatData?.status === "blocked" ? "Reservada" : "Libre",
       Comprador: compra?.buyerName || "",
       DNI: compra?.buyerDni || "",
       Email: compra?.buyerEmail || "",
@@ -115,15 +132,19 @@ function exportarExcel(compras, seats) {
       Fecha: compra?.timestamp?.toDate ? compra.timestamp.toDate().toLocaleString("es-AR") : "",
     };
   });
+
   const headers = Object.keys(filas[0]);
   const csv = [
     headers.join(";"),
     ...filas.map(r => headers.map(h => `"${(r[h] || "").toString().replace(/"/g, '""')}"`).join(";"))
   ].join("\n");
+
   const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url; a.download = "mussas-entradas-2026.csv"; a.click();
+  a.href = url;
+  a.download = `mussas-entradas-2026_${Date.now()}.csv`;
+  a.click();
   URL.revokeObjectURL(url);
 }
 
@@ -376,397 +397,4 @@ export default function App() {
               </div>
               {error && <p style={{ color: "#e05050", fontSize: 13, marginBottom: 12 }}>{error}</p>}
               <button className="btn-primary" onClick={confirmarCompra} disabled={uploading} style={{ width: "100%" }}>
-                {uploading ? "Procesando reserva…" : "Confirmar reserva"}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {phase === "done" && (
-          <div className="ticket">
-            <div style={{ fontSize: 52, marginBottom: 14 }}>🎟️</div>
-            <h2 style={{ fontSize: 34, marginBottom: 8 }}>¡Reserva confirmada!</h2>
-            <p style={{ fontSize: 14, color: "var(--gold-light)", marginBottom: 24, lineHeight: 1.6 }}>
-              Te enviamos un mail de confirmación a <strong>{buyerEmail}</strong>
-            </p>
-            <div style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)", padding: "20px 0", marginBottom: 20 }}>
-              <p style={{ fontSize: 11, color: "var(--text-dim)", letterSpacing: ".12em", marginBottom: 10 }}>TUS BUTACAS</p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
-                {mySeats.map(s => <span key={s} className="seat-tag">{s}</span>)}
-              </div>
-              <p style={{ fontSize: 16, color: "var(--gold)", marginTop: 14 }}>${total.toLocaleString("es-AR")} ARS</p>
-            </div>
-            <p style={{ fontSize: 13, color: "var(--text-mid)", lineHeight: 1.8 }}>
-              Para obtener tus entradas físicas, acercate a Mussas<br />
-              <strong style={{ color: "var(--gold-light)" }}>lunes a viernes de 17 a 20 hs.</strong><br />
-              para abonar el saldo.<br /><br />
-              Las entradas físicas son <strong style={{ color: "var(--gold-light)" }}>indispensables para ingresar al evento</strong>.
-            </p>
-          </div>
-        )}
-      </main>
-
-      {toast && (
-        <div style={{ position: "fixed", bottom: 80, left: "50%", transform: "translateX(-50%)", background: toast.type === "error" ? "#3a1010" : toast.type === "warn" ? "#2e2010" : "var(--dark3)", border: `1px solid ${toast.type === "error" ? "var(--red)" : toast.type === "warn" ? "var(--gold)" : "#333"}`, color: toast.type === "warn" ? "var(--gold-light)" : "var(--cream)", padding: "12px 24px", fontSize: 14, zIndex: 100, maxWidth: 340, textAlign: "center", boxShadow: "0 4px 24px rgba(0,0,0,.5)", lineHeight: 1.5 }}>
-          {toast.msg}
-        </div>
-      )}
-      <StickyLegend show={phase === "mapa"} />
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PANEL ADMIN
-// ═══════════════════════════════════════════════════════════════════════════════
-function AdminPanel() {
-  const [authed, setAuthed] = useState(false);
-  const [pass, setPass] = useState("");
-  const [passError, setPassError] = useState("");
-  const [seats, setSeats] = useState({});
-  const [logs, setLogs] = useState([]);
-  const [compras, setCompras] = useState([]);
-  const [tab, setTab] = useState("sala");
-  const [resetting, setResetting] = useState(false);
-
-  const login = () => {
-    if (pass === CONFIG.ADMIN_PASSWORD) { setAuthed(true); logEvent("ADMIN", LOG_EVENTS.ADMIN_LOGIN); }
-    else setPassError("Contraseña incorrecta.");
-  };
-
-  useEffect(() => {
-    if (!authed) return;
-    const unsub = onSnapshot(doc(db, "entradas", "sala"), s => s.exists() && setSeats(s.data().seats || {}));
-    getLogs(300).then(setLogs);
-    getDocs(query(collection(db, "compras"), orderBy("timestamp", "desc"), limit(200)))
-      .then(snap => setCompras(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-    return unsub;
-  }, [authed]);
-
-  const activarButaca = async (seatId) => {
-    await runTransaction(db, async tx => {
-      const ss = await tx.get(doc(db, "entradas", "sala"));
-      const upd = { ...ss.data().seats };
-      upd[seatId] = { status: "free", userId: null, blockedUntil: null };
-      tx.update(doc(db, "entradas", "sala"), { seats: upd });
-    });
-    logEvent("ADMIN", LOG_EVENTS.ADMIN_ACTIVO_BUTACA, { seatId });
-  };
-
-  const anularButaca = async (seatId) => {
-    if (!confirm(`¿Anular butaca ${seatId}?`)) return;
-    await runTransaction(db, async tx => {
-      const ss = await tx.get(doc(db, "entradas", "sala"));
-      const upd = { ...ss.data().seats };
-      upd[seatId] = { status: "sold", userId: "ADMIN-ANULADA", blockedUntil: null };
-      tx.update(doc(db, "entradas", "sala"), { seats: upd });
-    });
-    logEvent("ADMIN", LOG_EVENTS.ADMIN_ANULO_BUTACA, { seatId });
-  };
-
-  if (!authed) return (
-    <div style={{ minHeight: "100vh", background: "var(--dark)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div className="top-stripe" style={{ position: "fixed", top: 0, left: 0, right: 0 }} />
-      <div className="card" style={{ maxWidth: 360, width: "100%", textAlign: "center" }}>
-        <div style={{ fontSize: 36, marginBottom: 12 }}>🔐</div>
-        <h2 style={{ fontSize: 24, marginBottom: 20 }}>Panel Admin</h2>
-        <input type="password" placeholder="Contraseña" value={pass} onChange={e => setPass(e.target.value)} onKeyDown={e => e.key === "Enter" && login()} style={{ marginBottom: 12 }} />
-        {passError && <p style={{ color: "#e05050", fontSize: 13, marginBottom: 10 }}>{passError}</p>}
-        <button className="btn-primary" onClick={login} style={{ width: "100%" }}>Ingresar</button>
-      </div>
-    </div>
-  );
-
-  const soldSeats = Object.entries(seats).filter(([, s]) => s.status === "sold");
-  const blockedSeats = Object.entries(seats).filter(([, s]) => s.status === "blocked");
-  const freeSeats = Object.entries(seats).filter(([, s]) => s.status === "free");
-
-  return (
-    <div style={{ minHeight: "100vh", background: "var(--dark)" }}>
-      <div className="top-stripe" />
-      <header style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
-        <div>
-          <p className="eyebrow" style={{ marginBottom: 4 }}>Panel Admin</p>
-          <h1 style={{ fontFamily: "'Cormorant Garamond',serif", fontWeight: 300, fontSize: 26 }}>Mussas — Función 2026</h1>
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="btn-ghost" style={{ fontSize: 11, borderColor: "var(--green-light)", color: "var(--green-light)" }}
-            onClick={() => exportarExcel(compras, seats)}>📊 Descargar Excel</button>
-          <button className="btn-ghost" style={{ fontSize: 11, borderColor: "var(--red)", color: "var(--red)" }} disabled={resetting}
-            onClick={async () => { if (!confirm("¿Resetear toda la sala?")) return; setResetting(true); await resetSala(); setResetting(false); }}>
-            {resetting ? "Reseteando…" : "🗑 Resetear sala"}
-          </button>
-          <a href="/"><button className="btn-ghost" style={{ fontSize: 11 }}>← Volver al sitio</button></a>
-        </div>
-      </header>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 1, background: "var(--border)" }}>
-        {[{ label: "Vendidas", value: soldSeats.length, color: "var(--red)" }, { label: "Reservadas", value: blockedSeats.length, color: "var(--gold)" }, { label: "Libres", value: freeSeats.length, color: "var(--green-light)" }, { label: "Compras", value: compras.length, color: "var(--cream)" }].map(({ label, value, color }) => (
-          <div key={label} style={{ background: "var(--dark2)", padding: "18px 20px", textAlign: "center" }}>
-            <div style={{ fontSize: 30, fontFamily: "'Archivo Narrow',sans-serif", fontWeight: 600, color }}>{value}</div>
-            <div style={{ fontSize: 10, letterSpacing: ".12em", color: "var(--text-dim)", marginTop: 4 }}>{label.toUpperCase()}</div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 24px" }}>
-        {[["sala", "Sala"], ["compras", "Compras"], ["logs", "Log"]].map(([id, label]) => (
-          <button key={id} onClick={() => setTab(id)} style={{ background: "none", border: "none", borderBottom: tab === id ? "2px solid var(--gold)" : "2px solid transparent", color: tab === id ? "var(--gold)" : "var(--text-dim)", fontFamily: "'Archivo Narrow',sans-serif", fontSize: 13, letterSpacing: ".08em", padding: "14px 20px", cursor: "pointer", textTransform: "uppercase" }}>{label}</button>
-        ))}
-      </div>
-
-      <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-        {tab === "sala" && (
-          <div>
-            <p style={{ fontSize: 13, color: "var(--text-mid)", marginBottom: 20 }}>Tocá una butaca para gestionarla.</p>
-            <SalaMap seats={seats} mySeats={[]} onToggle={() => { }} userId="ADMIN" adminMode onActivar={activarButaca} onAnular={anularButaca} />
-          </div>
-        )}
-
-        {tab === "compras" && (
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-              <p style={{ fontSize: 13, color: "var(--text-mid)" }}>{compras.length} compra{compras.length !== 1 ? "s" : ""} registrada{compras.length !== 1 ? "s" : ""}</p>
-              <button className="btn-ghost" style={{ fontSize: 11 }} onClick={() => exportarExcel(compras, seats)}>📊 Descargar Excel</button>
-            </div>
-            {compras.length === 0 && <p style={{ color: "var(--text-dim)", fontSize: 13 }}>No hay compras registradas.</p>}
-            <div style={{ display: "grid", gap: 10 }}>
-              {compras.map(c => (
-                <div key={c.id} style={{ background: "var(--dark2)", border: "1px solid var(--border)", padding: "20px 24px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-                    <div>
-                      <p style={{ fontSize: 16, fontWeight: 600, marginBottom: 2 }}>{c.buyerName}</p>
-                      <p style={{ fontSize: 13, color: "var(--text-mid)" }}>DNI: {c.buyerDni} · {c.buyerEmail}</p>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <p style={{ fontSize: 16, color: "var(--gold)", fontWeight: 600 }}>${(c.total || 0).toLocaleString("es-AR")} ARS</p>
-                      <p style={{ fontSize: 11, color: "var(--text-dim)" }}>{c.timestamp?.toDate ? c.timestamp.toDate().toLocaleString("es-AR") : "—"}</p>
-                    </div>
-                  </div>
-                  <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                    <div>
-                      <p style={{ fontSize: 13, color: "var(--gold-light)", marginBottom: 2 }}>Alumna: <strong>{c.alumnaName}</strong></p>
-                      <p style={{ fontSize: 12, color: "var(--text-dim)" }}>Butacas: <strong style={{ color: "var(--cream)" }}>{(c.seats || []).join(", ")}</strong></p>
-                    </div>
-                    {c.comprobanteUrl && (
-                      <button className="btn-ghost" style={{ fontSize: 11 }}
-                        onClick={() => window.open(c.comprobanteUrl, "_blank", "noopener,noreferrer")}>
-                        Ver comprobante ↗
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {tab === "logs" && (
-          <div>
-            <button className="btn-ghost" style={{ marginBottom: 16, fontSize: 11 }} onClick={() => getLogs(300).then(setLogs)}>↻ Actualizar</button>
-            <div style={{ display: "grid", gap: 4 }}>
-              {logs.map(l => (
-                <div key={l.id} style={{ background: "var(--dark2)", border: "1px solid var(--border)", padding: "10px 16px", display: "grid", gridTemplateColumns: "160px 1fr auto", gap: 12, alignItems: "center", fontSize: 12 }}>
-                  <span style={{ color: "var(--text-dim)", fontFamily: "monospace", fontSize: 10 }}>{l.timestamp?.toDate ? l.timestamp.toDate().toLocaleString("es-AR") : "—"}</span>
-                  <span><span style={{ color: "var(--gold)", marginRight: 8 }}>{l.event}</span>{l.details && Object.keys(l.details).length > 0 && <span style={{ color: "var(--text-dim)" }}>· {JSON.stringify(l.details)}</span>}</span>
-                  <span style={{ color: "#444", fontFamily: "monospace", fontSize: 10 }}>{(l.userId || "").slice(0, 14)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MAPA DE SALA — PLANO FIDELIGNO CON 3 BLOQUES POR FILA Y 2 PASILLOS
-// ═══════════════════════════════════════════════════════════════════════════════
-function SalaMap({ seats, mySeats, onToggle, userId, adminMode, onActivar, onAnular }) {
-  const [adminSeat, setAdminSeat] = useState(null);
-  const [dims, setDims] = useState({ SW: 12, SG: 2, AISLE: 20, SH: 10 });
-
-  const maxIzq = 8;
-  const maxDer = 8;
-
-  useEffect(() => {
-    const calcDims = () => {
-      const screenW = window.innerWidth;
-      const available = screenW - 32 - 56;
-      const SG = 2;
-      const AISLE = screenW < 480 ? 12 : 20;
-      const SW_calc = Math.floor((available - (31 * SG) - (AISLE * 2)) / 31);
-      const SW = Math.max(8, Math.min(13, SW_calc));
-      const SH = Math.max(7, Math.round(SW * 0.8));
-      setDims({ SW, SG, AISLE, SH });
-    };
-    calcDims();
-    window.addEventListener("resize", calcDims);
-    return () => window.removeEventListener("resize", calcDims);
-  }, []);
-
-  if (!seats || Object.keys(seats).length === 0) return null;
-
-  const { SW, SG, AISLE, SH } = dims;
-
-  const getStatus = (seatId) => {
-    if (mySeats.includes(seatId)) return "mine";
-    const s = seats[seatId];
-    if (!s) return "free";
-    if (s.status === "sold") return "sold";
-    if (s.status === "blocked") return s.userId === userId ? "mine" : "blocked";
-    return "free";
-  };
-
-  const renderSector = (sector, sectorKey) => (
-    <div key={sectorKey} style={{ marginBottom: 36 }}>
-      <p style={{ textAlign: "center", fontSize: 10, letterSpacing: ".18em", color: "var(--text-dim)", textTransform: "uppercase", marginBottom: 12 }}>
-        {sector.label}
-      </p>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
-        {sector.filas.map(fila => {
-          const padIzq = maxIzq - fila.izq.length;
-          const padDer = maxDer - fila.der.length;
-
-          return (
-            <React.Fragment key={fila.id}>
-              {fila.pasilloSeparador && (
-                <div style={{ height: 22, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: ".2em" }}>PASILLO DE TRÁNSITO</span>
-                </div>
-              )}
-              <div style={{ display: "flex", alignItems: "center" }}>
-                <span style={{ fontSize: 8, color: "#556", width: 24, textAlign: "right", marginRight: 4, fontFamily: "monospace", flexShrink: 0 }}>
-                  {fila.id}
-                </span>
-
-                {/* 1. SECTOR LATERAL IZQUIERDO */}
-                <div style={{ display: "flex", gap: SG, width: maxIzq * (SW + SG), justifyContent: "flex-end", flexShrink: 0 }}>
-                  {Array(padIzq).fill(null).map((_, i) => (
-                    <div key={`pad-izq-${i}`} style={{ width: SW, height: SH, flexShrink: 0 }} />
-                  ))}
-                  {fila.izq.map(n => {
-                    const sid = `${fila.id}-${n}`;
-                    return (
-                      <div
-                        key={sid}
-                        className={`seat ${getStatus(sid)}`}
-                        style={{ width: SW, height: SH, flexShrink: 0 }}
-                        title={`Butaca ${sid}`}
-                        onClick={() => adminMode ? setAdminSeat(adminSeat === sid ? null : sid) : onToggle(sid)}
-                      />
-                    );
-                  })}
-                </div>
-
-                {/* PASILLO IZQUIERDO */}
-                <div style={{ width: AISLE, flexShrink: 0 }} />
-
-                {/* 2. SECTOR CENTRAL */}
-                <div style={{ display: "flex", gap: SG, flexShrink: 0 }}>
-                  {fila.centro.map(n => {
-                    const sid = `${fila.id}-${n}`;
-                    return (
-                      <div
-                        key={sid}
-                        className={`seat ${getStatus(sid)}`}
-                        style={{ width: SW, height: SH, flexShrink: 0 }}
-                        title={`Butaca ${sid}`}
-                        onClick={() => adminMode ? setAdminSeat(adminSeat === sid ? null : sid) : onToggle(sid)}
-                      />
-                    );
-                  })}
-                </div>
-
-                {/* PASILLO DERECHO */}
-                <div style={{ width: AISLE, flexShrink: 0 }} />
-
-                {/* 3. SECTOR LATERAL DERECHO */}
-                <div style={{ display: "flex", gap: SG, width: maxDer * (SW + SG), justifyContent: "flex-start", flexShrink: 0 }}>
-                  {fila.der.map(n => {
-                    const sid = `${fila.id}-${n}`;
-                    return (
-                      <div
-                        key={sid}
-                        className={`seat ${getStatus(sid)}`}
-                        style={{ width: SW, height: SH, flexShrink: 0 }}
-                        title={`Butaca ${sid}`}
-                        onClick={() => adminMode ? setAdminSeat(adminSeat === sid ? null : sid) : onToggle(sid)}
-                      />
-                    );
-                  })}
-                  {Array(padDer).fill(null).map((_, i) => (
-                    <div key={`pad-der-${i}`} style={{ width: SW, height: SH, flexShrink: 0 }} />
-                  ))}
-                </div>
-
-                <span style={{ fontSize: 8, color: "#556", width: 24, marginLeft: 4, fontFamily: "monospace", flexShrink: 0 }}>
-                  {fila.id}
-                </span>
-              </div>
-            </React.Fragment>
-          );
-        })}
-      </div>
-
-      {adminMode && adminSeat && seats[adminSeat] && (
-        <div style={{ background: "var(--dark3)", border: "1px solid var(--gold)", padding: 16, marginTop: 16, maxWidth: 380, margin: "16px auto 0" }}>
-          <p style={{ fontSize: 13, marginBottom: 6 }}><strong style={{ color: "var(--gold)" }}>{adminSeat}</strong> — <strong>{seats[adminSeat].status}</strong></p>
-          {seats[adminSeat].buyer && <p style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 2 }}>Comprador: {seats[adminSeat].buyer}</p>}
-          {seats[adminSeat].dni && <p style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 2 }}>DNI: {seats[adminSeat].dni}</p>}
-          {seats[adminSeat].alumna && <p style={{ fontSize: 12, color: "var(--text-mid)", marginBottom: 8 }}>Alumna: {seats[adminSeat].alumna}</p>}
-          {seats[adminSeat].comprobanteUrl && (
-            <button className="btn-ghost" style={{ fontSize: 11, width: "100%", marginBottom: 8 }}
-              onClick={() => window.open(seats[adminSeat].comprobanteUrl, "_blank")}>Ver comprobante ↗</button>
-          )}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-            {seats[adminSeat].status !== "free" && <button className="btn-ghost" style={{ fontSize: 10, borderColor: "var(--green-light)", color: "var(--green-light)" }} onClick={() => { onActivar(adminSeat); setAdminSeat(null); }}>✓ Liberar</button>}
-            {seats[adminSeat].status !== "sold" && <button className="btn-ghost" style={{ fontSize: 10, borderColor: "var(--red)", color: "var(--red)" }} onClick={() => { onAnular(adminSeat); setAdminSeat(null); }}>✗ Anular</button>}
-            <button className="btn-ghost" style={{ fontSize: 10 }} onClick={() => setAdminSeat(null)}>Cerrar</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  return (
-    <div style={{ textAlign: "center", overflowX: "auto" }}>
-      <div style={{ marginBottom: 24 }}><div className="escenario">Escenario</div></div>
-      {renderSector(SALA.platea, "platea")}
-      <div style={{ height: 1, background: "var(--border)", maxWidth: 500, margin: "4px auto 28px" }} />
-      {renderSector(SALA.pullman, "pullman")}
-      {!adminMode && <Legend />}
-    </div>
-  );
-}
-
-function Legend() {
-  return (
-    <div className="legend" style={{ marginTop: 20 }}>
-      {[{ cls: "free", label: "Libre" }, { cls: "mine", label: "Tu selección" }, { cls: "blocked", label: "Reservada por otro" }, { cls: "sold", label: "Vendida" }].map(({ cls, label }) => (
-        <div className="legend-item" key={cls}><div className={`legend-dot seat ${cls}`} /><span>{label}</span></div>
-      ))}
-    </div>
-  );
-}
-
-function StickyLegend({ show }) {
-  if (!show) return null;
-  return (
-    <div className="sticky-legend">
-      {[{ cls: "free", label: "Libre" }, { cls: "mine", label: "Tu selección" }, { cls: "blocked", label: "Reservada" }, { cls: "sold", label: "Vendida" }].map(({ cls, label }) => (
-        <div className="legend-item" key={cls}><div className={`legend-dot seat ${cls}`} /><span>{label}</span></div>
-      ))}
-    </div>
-  );
-}
-
-function Loader() {
-  return (
-    <div style={{ textAlign: "center", padding: 80, color: "var(--text-dim)" }}>
-      <div style={{ fontSize: 32, marginBottom: 12 }}>⌛</div>
-      <p style={{ fontSize: 12, letterSpacing: ".15em" }}>CONECTANDO…</p>
-    </div>
-  );
-}
+                {uploading ? "
