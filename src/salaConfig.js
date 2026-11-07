@@ -102,6 +102,6 @@ export const CONFIG = {
   ADMIN_EMAIL: "institutomussas@gmail.com",
   EMAILJS_SERVICE_ID: "service_3gat7f2",
   EMAILJS_TEMPLATE_ID: "template_lx7v1bf",
-  EMAILJS_PUBLIC_KEY: "8FUUXg0aGQ6kLJJLB",
+  EMAILJS_PUBLIC_KEY: "xvdeZXMTHmTPXjAF7",
   EMAILJS_TEMPLATE_COMPRADOR_ID: "template_79otqsm",
 };
