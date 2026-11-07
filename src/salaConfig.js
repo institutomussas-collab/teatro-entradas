@@ -40,25 +40,25 @@ export const SALA = {
       { id: "F11", grid: [null, 23, 21, 19, 17, 15, 13, null, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, null, 14, 16, 18, 20, 22, 24, null] },
       
       // Fila 12: 23 a 13 (Izq) · PASILLO · 11 a 1 y 2 a 12 (Centro) · PASILLO · 14 a 26 (Der)
-      { id: "F12", grid: [null, 23, 21, 19, 17, 15, 13, null, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, null, 14, 16, 18, 20, 22, 24, 26] },
+      { id: "F12", grid: [null, 23, 21, 19, 17, 15, null, 13, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, null, 16, 18, 20, 22, 24, 26] },
       
       // Fila 13: 23 a 13 (Izq) · PASILLO · 11 a 1 y 2 a 12 (Centro) · PASILLO · 14 a 24 (Der)
-      { id: "F13", grid: [null, 23, 21, 19, 17, 15, 13, null, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, null, 14, 16, 18, 20, 22, 24, null] },
+      { id: "F13", grid: [null, 23, 21, 19, 17, 15, null, 13, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, null, 16, 18, 20, 22, 24, null] },
       
-      // Fila 14: 25 a 13 (Izq) · PASILLO · 11 a 1 y 2 a 10 (Centro) · PASILLO · 12 a 24 (Der)
-      { id: "F14", grid: [25, 23, 21, 19, 17, 15, 13, null, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, null, 12, 14, 16, 18, 20, 22, 24] },
+      // Fila 14: 25 a 17 (Izq) · PASILLO · 15 a 1 y 2 a 14 (Centro) · PASILLO · 12 a 24 (Der)
+      { id: "F14", grid: [25, 23, 21, 19, 17, null, 15, 13, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, null, 16, 18, 20, 22, 24] },
       
-      // Fila 15: 25 a 13 (Izq) · PASILLO · 11 a 1 y 2 a 10 (Centro) · PASILLO · 12 a 24 (Der)
-      { id: "F15", grid: [25, 23, 21, 19, 17, 15, 13, null, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, null, 12, 14, 16, 18, 20, 22, 24] },
+      // Fila 15: 25 a 17 (Izq) · PASILLO · 15 a 1 y 2 a 14 (Centro) · PASILLO · 16 a 24 (Der)
+      { id: "F15", grid: [25, 23, 21, 19, 17, null, 15, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, null, 16, 18, 20, 22, 24] },
       
-      // Fila 16: 23 a 13 (Izq) · PASILLO · 11 a 1 y 2 a 10 (Centro) · PASILLO · 12 a 24 (Der)
-      { id: "F16", grid: [null, 23, 21, 19, 17, 15, 13, null, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, null, 12, 14, 16, 18, 20, 22, 24, null] },
+      // Fila 16: 23 a 17 (Izq) · PASILLO · 15 a 1 y 2 a 16 (Centro) · PASILLO · 18 a 24 (Der)
+      { id: "F16", grid: [null, 23, 21, 19, 17, 15, 13, null, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, 16, null, 18, 20, 22, 24, null] },
       
-      // Fila 17: 25 a 13 (Izq) · PASILLO · 11 a 1 y 2 a 10 (Centro) · PASILLO · 12 a 22 (Der)
-      { id: "F17", grid: [25, 23, 21, 19, 17, 15, 13, null, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, null, 12, 14, 16, 18, 20, 22, null] },
+      // Fila 17: 25 a 19 (Izq) · PASILLO · 17 a 1 y 2 a 14 (Centro) · PASILLO · 16 a 22 (Der)
+      { id: "F17", grid: [25, 23, 21, 19, null, 17, 15, 13, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, null, 16, 18, 20, 22, null] },
       
-      // Fila 18: 17 a 13 (Izq) · PASILLO · 11 a 1 y 2 a 12 (Centro) · PASILLO · 14 (Der)
-      { id: "F18", grid: [null, null, null, null, 17, 15, 13, null, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, null, 14, null, null, null, null, null] },
+      // Fila 18:  (Izq) · PASILLO · 17 a 1 y 2 a 14 (Centro) · PASILLO ·  (Der)
+      { id: "F18", grid: [null, null, null, null, null, 17, 15, 13, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, 12, 14, null, null, null, null, null, null] },
     ]
   },
   pullman: {
