@@ -10,7 +10,7 @@ export const SALA = {
       { id: "F1",  grid: [null, null, 19, 17, 15, 13, 11, null, 9, 7, 5, 3, 1, 2, 4, 6, 8, null, 10, 12, 14, 16, null, null, null, null, null] },
       
       // Fila 2: 21 a 11 (Izq) · PASILLO · 9 a 1 y 2 a 10 (Centro) · PASILLO · 12 a 18 (Der)
-      { id: "F2",  grid: [null, 21, 19, 17, 15, 13, 11, null, 9, 7, 5, 3, 1, 2, 4, 6, 8, null, 10,12, 14, 16, 18, null, null, null, null] },
+      { id: "F2",  grid: [null, 21, 19, 17, 15, 13, null, 11, 9, 7, 5, 3, 1, 2, 4, 6, 8, null, 10,12, 14, 16, 18, null, null, null, null] },
       
       // Fila 3: 19 a 11 (Izq) · PASILLO · 9 a 1 y 2 a 10 (Centro) · PASILLO · 12 a 20 (Der)
       { id: "F3",  grid: [null, null, 19, 17, 15, 13, 11, null, 9, 7, 5, 3, 1, 2, 4, 6, 8, 10, null, 12, 14, 16, 18, 20, null, null, null] },
